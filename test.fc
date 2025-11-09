@@ -1,0 +1,46 @@
+#include "stdlib.fc";
+
+() recv_internal (int in_msg_value, cell in_msg_full, slice in_msg) {
+    (int val, slice in_msg_full_reader) = in_msg_full.begin_parse().load_uint(4);
+    if (val & 1) {
+        return ();
+    }
+    begin_cell()
+    if (in_msg.slice_bits() < 32) {
+        return ();
+    }
+    in_msg_full_reader.load_uint()
+    (int val_1, slice in_msg_1) = in_msg.load_uint(32);
+    if (val_1 != 1886156135 & val_1 != 1685288050) {
+        return ();
+    }
+    (slice addr, _) = in_msg_full_reader.load_msg_addr();
+    (int wc, int addr_hash) = parse_std_addr(addr);
+    slice cell_reader = begin_cell().store_int(wc, 8).store_uint(addr_hash, 256).end_cell().begin_parse();
+    (cell dict, _) = get_data().begin_parse().skip_bits(320).load_maybe_ref();
+    (_, int result) = dict.dict_get?(264, cell_reader);
+    if ( ~ result) {
+        return ();
+    }
+    (int val_2, slice in_msg_2) = in_msg_1.load_uint(64);
+    builder bld = begin_cell();
+    if (val_1 == 1886156135) {
+        (int amount, slice in_msg_3) = in_msg_2.load_coins();
+        (cell dict_1, _) = in_msg_3.load_maybe_ref();
+        (var element, _) = get_balance();
+        throw_unless(80, element - in_msg_value >= amount);
+        send_raw_message(bld.store_uint(24, 6).store_slice(addr).store_coins(amount).store_maybe_ref(dict_1).store_uint(0, 106).store_uint(1886156135 | 2147483648, 32).store_uint(val_2, 64).end_cell(), 64);
+    } else {
+    }
+    if (val_1 == 1685288050) {
+        (cell dict_2, _) = dict.dict_delete?(264, cell_reader);
+        set_data(begin_cell().store_slice(get_data().begin_parse().first_bits(320)).store_maybe_ref(dict_2).end_cell());
+        if (val & 2) {
+            int val_3 = 0;
+            send_raw_message(bld.store_uint(24, 6).store_slice(addr).store_coins(val_3).store_uint(val_3, 107).store_uint(1685288050 | 2147483648, 32).store_uint(val_2, 64).end_cell(), 64);
+        } else {
+        }
+    } else {
+    }
+    return ();
+}
