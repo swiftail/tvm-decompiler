@@ -33,37 +33,54 @@ fun registerVirtualInstructions(registry: ParserRegistry) {
         registry,
         { location, _ -> TvmCellBuildStixInst(location) },
         { inst -> listOf(
-            TvmStackEntryType.INT to AstElement.Literal(inst.c)
+            TvmStackEntryType.INT to AstElement.Literal(inst.c + 1)
         ) },
     )
     registerVirtualInstruction<TvmCellBuildStuInst, TvmCellBuildStuxInst>(
         registry,
         { location, _ -> TvmCellBuildStuxInst(location) },
         { inst -> listOf(
-            TvmStackEntryType.INT to AstElement.Literal(inst.c)
+            TvmStackEntryType.INT to AstElement.Literal(inst.c + 1)
         ) },
     )
     registerVirtualInstruction<TvmExceptionsThrowifnotInst, TvmExceptionsThrowargifnotInst>(
         registry,
-        { location, inst -> TvmExceptionsThrowargifnotInst(location, inst.n) }
+        { location, inst -> TvmExceptionsThrowargifnotInst(location, inst.n) },
+        { _ ->
+            listOf(
+                TvmStackEntryType.INT to AstElement.Literal(0)
+            )
+        }
     )
-    registerVirtualInstruction<TvmExceptionsThrowifnotShortInst, TvmExceptionsThrowargifnotInst>(
+    registerVirtualInstruction<TvmExceptionsThrowifnotShortInst, TvmExceptionsThrowifInst>(
         registry,
-        { location, inst -> TvmExceptionsThrowargifnotInst(location, inst.n) }
+        { location, inst -> TvmExceptionsThrowifInst(location, inst.n) }
     )
     registerVirtualInstruction<TvmExceptionsThrowifInst, TvmExceptionsThrowargifInst>(
         registry,
-        { location, inst -> TvmExceptionsThrowargifInst(location, inst.n) }
+        { location, inst -> TvmExceptionsThrowargifInst(location, inst.n) },
+        { _ ->
+            listOf(
+                TvmStackEntryType.INT to AstElement.Literal(0)
+            )
+        }
     )
-    registerVirtualInstruction<TvmExceptionsThrowifShortInst, TvmExceptionsThrowargifInst>(
+    registerVirtualInstruction<TvmExceptionsThrowifShortInst, TvmExceptionsThrowifInst>(
         registry,
-        { location, inst -> TvmExceptionsThrowargifInst(location, inst.n) }
+        { location, inst -> TvmExceptionsThrowifInst(location, inst.n) }
     )
     registerVirtualInstruction<TvmCellParsePlduInst, TvmCellParsePlduxInst>(
         registry,
         { location, _ -> TvmCellParsePlduxInst(location) },
         { inst -> listOf(
-            TvmStackEntryType.INT to AstElement.Literal(inst.c)
+            TvmStackEntryType.INT to AstElement.Literal(inst.c + 1)
+        ) }
+    )
+    registerVirtualInstruction<TvmCellParsePldiInst, TvmCellParsePldixInst>(
+        registry,
+        { location, _ -> TvmCellParsePldixInst(location) },
+        { inst -> listOf(
+            TvmStackEntryType.INT to AstElement.Literal(inst.c + 1)
         ) }
     )
     registerVirtualInstruction<TvmTupleIndexInst, TvmTupleIndexvarInst>(

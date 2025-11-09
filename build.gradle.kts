@@ -24,6 +24,7 @@ dependencies {
     implementation("org.reflections:reflections:0.10.2")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.20.1")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.20.1")
+    implementation("org.apache.commons:commons-collections4:4.5.0")
 }
 
 tasks.test {

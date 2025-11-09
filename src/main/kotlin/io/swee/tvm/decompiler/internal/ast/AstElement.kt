@@ -119,7 +119,16 @@ sealed interface AstElement {
                 return ""
             }
 
-            return resolve0(ctx, nameResolver, entryUsage, varDeclarations, varDeclarationsReversed, nameCache, usedNames, registry)
+            return resolve0(
+                ctx,
+                nameResolver,
+                entryUsage,
+                varDeclarations,
+                varDeclarationsReversed,
+                nameCache,
+                usedNames,
+                registry
+            )
         }
 
         fun resolve0(
@@ -217,7 +226,7 @@ sealed interface AstElement {
         }
     }
 
-    @Deprecated("booba")
+    @Deprecated("test")
     class Composition(val fragments: List<AstElement>) : AstElement {
         override fun resolve(
             ctx: CodeBlockContext,
@@ -263,12 +272,14 @@ sealed interface AstElement {
             usedNames: MutableMap<String, Int>,
             registry: ParserRegistry
         ): String {
-            return "return (${ stack.joinToString(", ") { 
-                VariableUsage(it, true).resolve(
-                    ctx, nameResolver, entryUsage, varDeclarations,
-                    varDeclarationsReversed, nameCache, usedNames, registry
-                )
-            } });"
+            return "return (${
+                stack.joinToString(", ") {
+                    VariableUsage(it, true).resolve(
+                        ctx, nameResolver, entryUsage, varDeclarations,
+                        varDeclarationsReversed, nameCache, usedNames, registry
+                    )
+                }
+            })"
         }
 
         override fun stackEntries(): List<StackEntry> {
@@ -288,7 +299,8 @@ sealed interface AstElement {
             registry: ParserRegistry
         ): String {
             return "(${
-                inheritedStackTracker.usedEntries.reversed().joinToString(", ") { "${it.type.typename} ${nameResolver(it.name)}" }
+                inheritedStackTracker.usedEntries.reversed()
+                    .joinToString(", ") { "${it.type.typename} ${nameResolver(it.name)}" }
             })"
         }
     }
@@ -307,10 +319,42 @@ sealed interface AstElement {
             usedNames: MutableMap<String, Int>,
             registry: ParserRegistry
         ): String {
-            return "$name(${args.joinToString (", ") { it.resolve(
-                ctx, nameResolver, entryUsage, varDeclarations,
-                varDeclarationsReversed, nameCache, usedNames, registry
-            ) }})"
+            val resolvedArgs = args.map {
+                it.resolve(
+                    ctx, nameResolver, entryUsage, varDeclarations,
+                    varDeclarationsReversed, nameCache, usedNames, registry
+                )
+            }
+
+            when {
+                name.startsWith("_")
+                        && name.endsWith("_")
+                        && resolvedArgs.size == 2 -> {
+                    // infix
+                    return "(${resolvedArgs[0]} ${name.removePrefix("_").removeSuffix("_")} ${resolvedArgs[1]})"
+                }
+
+                name.endsWith("_")
+                        && !name.startsWith("_")
+                        && resolvedArgs.size == 1 -> {
+                    // prefix
+                    return "(${name.removeSuffix("_")} ${resolvedArgs[0]})"
+                }
+
+                resolvedArgs.isEmpty() -> {
+                    return "$name()"
+                }
+                // TODO
+                (name.startsWith("store_") || name.startsWith("load_") || name.startsWith("end_") ||
+                        name.startsWith("slice_") || name.startsWith("begin_") || name.startsWith("parse_")
+                        || name.startsWith("skip_") || name.startsWith("preload_")) -> {
+                    return "${resolvedArgs.first()}.$name(${resolvedArgs.drop(1).joinToString(", ")})"
+                }
+
+                else -> {
+                    return "$name(${resolvedArgs.joinToString(", ")})"
+                }
+            }
         }
 
         override fun stackEntries(): List<StackEntry> {

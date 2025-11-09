@@ -10,19 +10,35 @@ fun registerEquivParsers(registry: ParserRegistry) {
                     && parse(ctx, TvmStackBasicPushInst(inst.location, inst.k), ident)
         }
         registerFull<TvmStackComplexXchg2Inst> { ctx, inst, ident ->
-            return@registerFull parse(ctx, TvmStackBasicXchgIjInst(inst.location, 1 - 1, inst.i - 1), ident)
+            return@registerFull parse(
+                ctx,
+                TvmStackBasicXchgIjInst(inst.location, 1 - 1, inst.i - 1),
+                ident
+            )
                     && parse(ctx, TvmStackBasicXchgIjInst(inst.location, 0 - 1, inst.j - 1), ident)
         }
         registerFull<TvmStackComplexXchg3Inst> { ctx, inst, ident ->
-            return@registerFull parse(ctx, TvmStackBasicXchgIjInst(inst.location, 2 - 1, inst.i - 1), ident)
+            return@registerFull parse(
+                ctx,
+                TvmStackBasicXchgIjInst(inst.location, 2 - 1, inst.i - 1),
+                ident
+            )
                     && parse(ctx, TvmStackBasicXchgIjInst(inst.location, 1 - 1, inst.j - 1), ident)
                     && parse(ctx, TvmStackBasicXchgIjInst(inst.location, 0 - 1, inst.k - 1), ident)
         }
         registerFull<TvmStackBasicXchg0iInst> { ctx, inst, ident ->
-            return@registerFull parse(ctx, TvmStackBasicXchgIjInst(inst.location, 0 - 1, inst.i - 1), ident)
+            return@registerFull parse(
+                ctx,
+                TvmStackBasicXchgIjInst(inst.location, 0 - 1, inst.i - 1),
+                ident
+            )
         }
         registerFull<TvmStackBasicXchg1iInst> { ctx, inst, ident ->
-            return@registerFull parse(ctx, TvmStackBasicXchgIjInst(inst.location, 1 - 1, inst.i - 1), ident)
+            return@registerFull parse(
+                ctx,
+                TvmStackBasicXchgIjInst(inst.location, 1 - 1, inst.i - 1),
+                ident
+            )
         }
         registerFull<TvmStackComplexXcpuInst> { ctx, inst, ident ->
             return@registerFull parse(ctx, TvmStackBasicXchg0iInst(inst.location, inst.i), ident)
@@ -45,7 +61,11 @@ fun registerEquivParsers(registry: ParserRegistry) {
             return@registerFull parse(ctx, TvmStackComplexXchg2Inst(inst.location, 2, 1), ident)
         }
         registerFull<TvmStackBasicXchg0iLongInst> { ctx, inst, ident ->
-            return@registerFull parse(ctx, TvmStackBasicXchgIjInst(inst.location, 0 - 1, inst.i - 1), ident)
+            return@registerFull parse(
+                ctx,
+                TvmStackBasicXchgIjInst(inst.location, 0 - 1, inst.i - 1),
+                ident
+            )
         }
     }
 }

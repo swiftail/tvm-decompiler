@@ -19,14 +19,17 @@ sealed class TvmStackEntryType(val typename: String) {
     data object UNKNOWN : TvmStackEntryType("var");
 
     companion object {
-        fun fromTvmDescription(value: Cp0InstructionRegistry.TvmInstSimpleStackEntry): TvmStackEntryType {
-            if (value.value_types.size == 1) {
-                when (value.value_types.single()) {
-                    "Cell" -> return CELL
-                    "Slice" -> return SLICE
-                }
+        fun fromTvmStackEntryDescription(value: Cp0InstructionRegistry.TvmCp0InstValueFlowOutputsEntry.Simple): TvmStackEntryType {
+            return when (value.valueTypes?.singleOrNull()) {
+                Cp0InstructionRegistry.TvmCp0InstStackEntryType.INT -> INT
+                else -> UNKNOWN
             }
-            return UNKNOWN
+        }
+        fun fromTvmBytecodeOperandDescription(value: Cp0InstructionRegistry.TvmCp0InstBytecodeOperand): TvmStackEntryType {
+            return when (value.type) {
+                Cp0InstructionRegistry.TvmCp0InstBytecodeOperandType.UINT -> INT
+                else -> UNKNOWN
+            }
         }
     }
 }

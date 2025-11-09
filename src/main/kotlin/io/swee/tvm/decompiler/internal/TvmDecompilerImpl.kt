@@ -98,6 +98,7 @@ object TvmDecompilerImpl : TvmDecompiler {
             builtinContent,
         )
 
+        registerAlignmentParsers(registry)
         registerAppParsers(registry)
         registerRegistersParsers(registry)
         registerConstParsers(registry)
@@ -159,6 +160,7 @@ object TvmDecompilerImpl : TvmDecompiler {
             .append(AstElement.Raw(methodName))
             .append(AstElement.Raw(" "))
             .append(AstElement.FunctionArgs(inheritedStackTracker))
+            .append(AstElement.Raw(" method_id(${data.id}) impure "))
             .append(AstElement.Raw(" {\n"))
 
         try {
@@ -175,9 +177,16 @@ object TvmDecompilerImpl : TvmDecompiler {
         )
     }
 
-    private fun parseInstruction(registry: ParserRegistry, inst: TvmInst, ctx: CodeBlockContext, ident: String) {
-        if (!registry.parse(ctx, inst, ident)) {
-            ctx.append(AstElement.Raw(";; unparsed: ${inst.mnemonic} ${inst}"))
+    private fun parseInstruction(
+        registry: ParserRegistry,
+        inst: TvmInst,
+        ctx: CodeBlockContext,
+        ident: String,
+        nextElements: MutableList<TvmInst>
+    ) {
+//        ctx.append(AstElement.Raw(";; ${inst.mnemonic} $inst\n${ident}"))
+        if (!registry.parse(ctx, inst, ident, nextElements)) {
+            ctx.append(AstElement.Raw(";; unparsed: ${inst.mnemonic} ${inst}\n"))
         }
     }
 
@@ -189,24 +198,18 @@ object TvmDecompilerImpl : TvmDecompiler {
         ret: Boolean
     ) {
         val instList = instList2.toMutableList()
-        // prepare
-        val iterator = instList.listIterator()
-        var prev = iterator.next()
-        while (iterator.hasNext()) {
-            val cur = iterator.next()
 
-            if (prev is TvmDictGetDictgetInst) {
-                check(cur is TvmTupleNullswapifnotInst)
-                iterator.remove()
-            }
-
-            prev = cur
-        }
-
-        for (inst in instList) {
+        var i = 0
+        while (i < instList.size) {
+            val inst = instList[i++]
+            val nextElements = instList.subList(i, instList.size).toMutableList()
             try {
                 ctx.append(AstElement.Raw(ident))
-                parseInstruction(registry, inst, ctx, ident)
+                val nextElementsSizePrev = nextElements.size
+                parseInstruction(registry, inst, ctx, ident, nextElements)
+                if (nextElements.size != nextElementsSizePrev) {
+                    i += (nextElementsSizePrev - nextElements.size)
+                }
                 ctx.append(AstElement.Raw("\n"))
             } catch (ex: Throwable) {
                 println("Exception during instruction parsing: ${inst.mnemonic} $inst")

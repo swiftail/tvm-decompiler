@@ -6,5 +6,5 @@ import java.nio.charset.Charset
 import kotlin.io.path.Path
 
 fun main() {
-   TvmDecompilerImpl.decompile(mevProtectionWalletCode)
+   TvmDecompilerImpl.decompile(walletv4code)
 }
