@@ -27,6 +27,7 @@ forall X -> X null() asm "PUSHNULL";
 forall X -> (X, ()) ~impure_touch(X x) impure asm "NOP";
 int now() asm "NOW";
 slice my_address() asm "MYADDR";
+cell my_code() asm "MYCODE";
 [int, cell] get_balance() asm "BALANCE";
 int cur_lt() asm "LTIME";
 int block_lt() asm "BLOCKLT";

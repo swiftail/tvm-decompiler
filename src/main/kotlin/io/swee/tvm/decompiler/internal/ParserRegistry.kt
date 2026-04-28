@@ -1,22 +1,31 @@
 package io.swee.tvm.decompiler.internal
 
 import org.ton.bytecode.*
+import java.util.logging.Logger
 import kotlin.reflect.KClass
 
-typealias InstParserFull<T> = (ctx: CodeBlockContext, inst: T, ident: String) -> Boolean
-typealias InstParserShort<T> = (ctx: CodeBlockContext, inst: T, ident: String) -> Unit
+typealias InstParserFull<T> = (ctx: IrBlockBuilder, inst: T) -> Boolean
+typealias InstParserShort<T> = (ctx: IrBlockBuilder, inst: T) -> Unit
+
+typealias InstParser = InstParserFull<List<TvmInst>>
+typealias InstPredicate = (List<TvmInst>) -> Boolean
+
+enum class ParserLevel {
+    MANUAL,
+    STDLIB,
+    RAW_ASM
+}
+
+data class RegisteredParser(
+    val predicate: InstPredicate?,
+    val parser: InstParser,
+    val level: ParserLevel
+)
 
 class ParserRegistry {
-    private val instParsers = HashMap<Class<out TvmInst>, InstParserFull<TvmInst>>()
-    private val chainParsers = Trie<Class<out TvmInst>, InstParserFull<List<TvmInst>>>()
-
-    fun getParser(instClass: Class<out TvmInst>): InstParserFull<TvmInst>? {
-        return instParsers[instClass]
-    }
-
-    inline fun <reified T : TvmInst> getParser(): InstParserFull<T>? {
-        return getParser(T::class.java)
-    }
+    private val logger = Logger.getLogger(ParserRegistry::class.java.name)
+    private val instParsers = HashMap<Class<out TvmInst>, MutableList<RegisteredParser>>()
+    private val chainParsers = Trie<Class<out TvmInst>, MutableList<RegisteredParser>>()
 
     private fun matchesChain(
         chain: List<Class<out TvmInst>>,
@@ -27,10 +36,10 @@ class ParserRegistry {
     }
 
     private fun collectChains(
-        node: Trie<Class<out TvmInst>, InstParserFull<List<TvmInst>>>,
+        node: Trie<Class<out TvmInst>, MutableList<RegisteredParser>>,
         prefix: List<Class<out TvmInst>>
-    ): List<Pair<List<Class<out TvmInst>>, InstParserFull<List<TvmInst>>>> {
-        val result = mutableListOf<Pair<List<Class<out TvmInst>>, InstParserFull<List<TvmInst>>>>()
+    ): List<Pair<List<Class<out TvmInst>>, List<RegisteredParser>>> {
+        val result = mutableListOf<Pair<List<Class<out TvmInst>>, List<RegisteredParser>>>()
         node.value?.let { result.add(prefix to it) }
         for ((clazz, child) in node.children) {
             result += collectChains(child, prefix + clazz)
@@ -38,72 +47,84 @@ class ParserRegistry {
         return result
     }
 
-    fun parse(ctx: CodeBlockContext, inst: TvmInst, ident: String, nextElements: MutableList<TvmInst> = mutableListOf()): Boolean {
-        val directParser = getParser(inst.javaClass)
-        if (directParser != null) {
-            return directParser(ctx, inst, ident)
-        }
+    fun parse(ctx: IrBlockBuilder, inst: TvmInst, nextElements: MutableList<TvmInst> = mutableListOf()): Boolean {
+        val singleInput = listOf(inst)
+        instParsers[inst.javaClass]?.let { parsers ->
+            val sortedParsers = parsers.sortedBy { it.level.ordinal }
 
-        val firstClass = inst.javaClass
-        val subTrie = chainParsers.getSubTrie(listOf(firstClass)) ?: return false
-
-        val possibleChains = collectChains(subTrie, listOf(firstClass))
-
-        for ((chain, parser) in possibleChains) {
-            if (matchesChain(chain, listOf(inst) + nextElements)) {
-                val result = parser(ctx, buildList {
-                    add(inst)
-                    addAll(nextElements.take(chain.size - 1))
-                }, ident)
-                if (result) {
-                    repeat(chain.size - 1) {
-                        nextElements.removeFirst()
-                    }
-                    return true
+            for (entry in sortedParsers) {
+                if (entry.predicate == null || entry.predicate(singleInput)) {
+                    if (entry.parser(ctx, singleInput)) return true
                 }
             }
         }
 
+        val subTrie = chainParsers.getSubTrie(listOf(inst.javaClass)) ?: return false
+        val possibleChains = collectChains(subTrie, listOf(inst.javaClass))
+            .sortedByDescending { it.first.size }
+
+        for ((chainClasses, parserEntries) in possibleChains) {
+            if (nextElements.size < chainClasses.size - 1) continue
+
+            val currentChainInput = listOf(inst) + nextElements.take(chainClasses.size - 1)
+
+            if (!matchesChain(chainClasses, currentChainInput)) continue
+
+            val sortedParsers = parserEntries.sortedBy { it.level.ordinal }
+
+            for (entry in sortedParsers) {
+                if (entry.predicate == null || entry.predicate(currentChainInput)) {
+                    if (entry.parser(ctx, currentChainInput)) {
+                        repeat(chainClasses.size - 1) { nextElements.removeFirst() }
+                        return true
+                    }
+                }
+            }
+        }
         return false
     }
 
 
-    fun register(
-        instClass: Class<out TvmInst>,
-        parser: InstParserFull<TvmInst>
+    fun <T : TvmInst> register(
+        instClass: Class<out T>,
+        level: ParserLevel,
+        parser: InstParserFull<T>,
+        predicate: InstPredicate? = null
     ) {
-        check(!instParsers.containsKey(instClass)) {
-            "Inst redefinition: ${instClass.simpleName}"
-        }
-//        println("registered: $instClass")
-        instParsers[instClass] = parser
+        instParsers.merge(
+            instClass,
+            mutableListOf(
+                RegisteredParser(
+                    predicate?.let { { predicate(it) } },
+                    { ctx, inst -> parser(ctx, inst.single() as T) },
+                    level
+                )),
+            { a, b -> a.apply { addAll(b) } }
+        )
     }
 
-    inline fun <reified T : TvmInst> registerFull(noinline parser: InstParserFull<T>) {
-        register(T::class.java, parser as InstParserFull<TvmInst>)
-    }
 
-    inline fun <reified T : TvmInst> register(noinline parser: InstParserShort<T>) {
-        register(T::class.java, uplift(parser) as InstParserFull<TvmInst>)
+    inline fun <reified T : TvmInst> register(
+        level: ParserLevel,
+        noinline parser: InstParserShort<T>,
+    ) {
+        register(T::class.java, level, uplift(parser) as InstParserFull<TvmInst>)
     }
 
     fun registerChain(
         instClasses: List<Class<out TvmInst>>,
-        parser: InstParserFull<List<*>>
+        level: ParserLevel,
+        parser: InstParser,
+        predicate: InstPredicate? = null,
     ) {
-        check(chainParsers.get(instClasses) == null) {
-            "Chain redefinition: ${instClasses.map { it.simpleName }}"
-        }
-//        println("registered: ${instClasses.map { it.simpleName }}")
-        chainParsers.insert(
-            instClasses,
-            parser
-        )
+        val existing = chainParsers.get(instClasses) ?: mutableListOf()
+        existing.add(RegisteredParser(predicate, parser, level))
+        chainParsers.insert(instClasses, existing)
     }
 
     fun <T> uplift(parserShort: InstParserShort<T>): InstParserFull<T> {
-        return { ctx, inst, ident ->
-            parserShort(ctx, inst, ident)
+        return { ctx, inst ->
+            parserShort(ctx, inst)
             true
         }
     }
@@ -143,9 +164,13 @@ class ParserRegistry {
             val companionInstance = companion?.objectInstance
             val mnemonicField = companion?.members?.find { it.name == "MNEMONIC" }
             val mnemonic = mnemonicField?.call(companionInstance)
-            println("Not implemented: ${mnemonic}\t${inst.simpleName}")
+            logger.fine("Not implemented: ${mnemonic}\t${inst.simpleName}")
         }
-        println("implemented: ${implemented.size} not implemented: ${notImplemented.size}")
+        logger.info("implemented: ${implemented.size} not implemented: ${notImplemented.size}")
+    }
+
+    fun hasNonConditionalParser(instClass: Class<out TvmInst>): Boolean {
+        return instParsers[instClass]?.find { it.predicate == null } != null
     }
 
 }

@@ -1,41 +1,30 @@
 package io.swee.tvm.decompiler.internal.instructions
 
 import io.swee.tvm.decompiler.internal.*
-import io.swee.tvm.decompiler.internal.ast.AstElement
-import org.ton.bytecode.TvmTupleIndexInst
+import io.swee.tvm.decompiler.internal.ir.IRNode
 import org.ton.bytecode.TvmTupleUntupleInst
 
 fun registerTupleParsers(registry: ParserRegistry) {
    with(registry) {
-//       register<TvmTupleIndexInst> { ctx, inst, ident ->
-//           val tuple = ctx.popTuple()
-//           val res = newUnknown(name("val"))
-//           ctx.push(res)
-//           ctx.append(declaration(
-//               res,
-//               composition(
-//                   AstElement.Raw("tuple_at("),
-//                   usage(tuple),
-//                   AstElement.Raw(", ${inst.k})"),
-//               )
-//           )).append(AstElement.Raw(";"))
-//       }
-       register<TvmTupleUntupleInst> { ctx, inst, ident ->
-           val tuple = ctx.popTuple()
+       register<TvmTupleUntupleInst>(ParserLevel.MANUAL) { ctx, inst ->
+           val tuple = ctx.stackPop(TvmStackEntryType.TUPLE.typename)
            val tupleType = tuple.type
 
-           check(tupleType is TvmStackEntryType.TUPLE)
-           check(inst.n == tupleType.elements.size)
-
-           val entries = tupleType.elements.mapIndexed { index, el ->
-               StackEntry.Simple(el, name("element_$index"))
+           val entries = if (tupleType is TvmStackEntryType.TUPLE && tupleType.elements.size == inst.n) {
+               tupleType.elements.mapIndexed { index, el ->
+                   StackEntry.Simple(el, name("element_$index"))
+               }
+           } else {
+               (0 until inst.n).map { index ->
+                   StackEntry.Simple(TvmStackEntryType.UNKNOWN, name("element_$index"))
+               }
            }
            for (entry in entries) {
-               ctx.push(entry)
+               ctx.stackPush(entry)
            }
 
-           ctx.append(
-               AstElement.VariableDeclaration(entries, AstElement.VariableUsage(tuple, true), untuple = true)
+           ctx.appendNode(
+               IRNode.VariableDeclaration(entries, IRNode.VariableUsage(tuple, true), untuple = true)
            )
        }
    }

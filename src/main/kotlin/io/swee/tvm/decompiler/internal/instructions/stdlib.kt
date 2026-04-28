@@ -1,140 +1,98 @@
 package io.swee.tvm.decompiler.internal.instructions
 
 import io.swee.tvm.decompiler.internal.*
-import io.swee.tvm.decompiler.internal.ast.AstElement
 import io.swee.tvm.decompiler.internal.instructions.Cp0InstructionRegistry.TvmCp0InstValueFlowOutputsEntry
 import org.ton.bytecode.*
 
 class StdlibRegistry(
     private val cp0InstructionRegistry: Cp0InstructionRegistry,
     private val stdlibContent: String,
-    private val builtinContent: String
+    private val builtinContent: String,
 ) {
+
+
     private companion object {
         private val ASM_FN_REGEX =
             "(?:forall\\s+(?<forallArgs>\\w+(?:\\s*,\\s*\\w+)*)\\s+->\\s+)?(?<returnType>.+?)\\s+(?<fnName>[^\\s\\(\\)]+)\\s*\\((?<fnArgs>(?:\\w+\\s+\\w+)(?:\\s*,\\s*\\w+\\s+\\w+)*)?\\)\\s*(?:\\w+)*\\s*asm(?:\\s*\\((?<asmDescription>.+)\\)\\s*)?\\s*(?<asmExpression>\"[^\"]+\"(?:\\s*\"[^\"]+\")*)\\s*;".toRegex()
         private val ASM_EXP_REGEX = "\"[^\"]+\"".toRegex()
     }
 
-    private fun registerAsmFunction(
-        registry: ParserRegistry,
-        instData: Cp0InstructionRegistry.InstructionData,
-        fnName: String
-    ) {
-        try {
-            registry.register(instData.instClass) { ctx, inst: Any?, _: String ->
-                val virtualArgs = instData.instDescriptionRaw.bytecode.operands.map {
-                    val virtualEntry = StackEntry.Simple(
-                        TvmStackEntryType.fromTvmBytecodeOperandDescription(it),
-                        StackEntryName.Const("virtual")
-                    )
-                    ctx.pushVirtual(virtualEntry)
+    private fun parseFnReorg(fnArgs: String, asmDescription: String): AsmFunctionFactory.Reorg {
+        val fnArgNames = fnArgs.split(',')
+            .map { it.trim().split(' ').last() }
+            .filter { it.isNotEmpty() }
 
-                    val literalValueField = inst!!.javaClass.declaredFields.find { field -> field.name == it.name }!!
-                    literalValueField.isAccessible = true
-                    var literalValue = literalValueField.get(inst)
+        val parts = asmDescription.split("->").map { it.trim() }
+        val asmInputs = parts[0].takeIf { it.isNotEmpty() }?.split(Regex("\\s+"))?.filter { it.isNotEmpty() }
+        val asmOutputs = parts.getOrNull(1)?.split(Regex("\\s+"))?.filter { it.isNotEmpty() }
 
-//                    for (displayHint in it.displayHints) {
-//                        when (displayHint) {
-//                            is Cp0InstructionRegistry.TvmCp0InstBytecodeOperandDisplayHint.Add -> {
-//                                literalValue = literalValue.toString().toLong() + displayHint.value
-//                            }
-//                            else -> {}
-//                        }
-//                    }
-
-                    ctx.append(AstElement.VariableDeclaration(listOf(virtualEntry), AstElement.Literal(literalValue)))
-                    ctx.popAny()
-                }
-
-                val args = (instData.instDescriptionRaw.valueFlow.inputs.stack ?: emptyList()).map {
-                    ctx.popAny() // TODO
-                }
-
-                val allArgs = virtualArgs + args
-
-                val functionCall = AstElement.FunctionCall(
-                    fnName,
-                    allArgs.map {
-                        AstElement.VariableUsage(
-                            it,
-                            true
-                        )
-                    }.reversed()
-                )
-
-                val newStackEntries = (instData.instDescriptionRaw.valueFlow.outputs.stack ?: emptyList()).map {
-                    it as TvmCp0InstValueFlowOutputsEntry.Simple
-                    StackEntry.Simple(
-                        TvmStackEntryType.fromTvmStackEntryDescription(it),
-                        StackEntryName.Const(it.name ?: "var")
-                    )
-                }
-                for (newStackEntry in newStackEntries) {
-                    ctx.push(newStackEntry)
-                }
-
-                when (newStackEntries.size) {
-                    0 -> {
-                        ctx.append(functionCall)
-                    }
-
-                    else -> {
-                        ctx.append(
-                            AstElement.VariableDeclaration(
-                                newStackEntries.reversed(),
-                                functionCall
-                            )
-                        )
-                    }
-
-                }
-
-                true
-            }
-        } catch (e: Throwable) {
-            if (e.message?.contains("Inst redefinition") == true) {
-                // TODO
-                return
-            }
-            throw e
+        val inputMap = asmInputs?.takeIf { it.isNotEmpty() }?.let { inputs ->
+            inputs.mapIndexedNotNull { asmIndex, name ->
+                val fnIndex = fnArgNames.indexOf(name)
+                if (fnIndex >= 0) asmIndex to fnIndex else null
+            }.toMap()
         }
+
+        val outputMap = asmOutputs?.takeIf { it.isNotEmpty() }?.let { outputs ->
+            outputs.mapIndexed { outIdx, inIdxStr ->
+                outIdx to inIdxStr.toInt()
+            }.toMap()
+        }
+
+        return AsmFunctionFactory.Reorg(input = inputMap, output = outputMap)
     }
 
     private fun parseStdlibLine(registry: ParserRegistry, line: String) {
         val match = ASM_FN_REGEX.matchEntire(line) ?: return
-        val groupForallArgs = match.groups["forallArgs"]?.value
-        val groupReturnType = match.groups["returnType"]?.value ?: return
+        val groupForallArgs = match.groups["forallArgs"]?.value // TODO
+        val groupReturnType = match.groups["returnType"]?.value ?: return // TODO
         val groupFnName = match.groups["fnName"]?.value ?: return
         val groupFnArgs = match.groups["fnArgs"]?.value
+        val groupAsmDescription = match.groups["asmDescription"]?.value
         val groupAsmExpression = match.groups["asmExpression"]?.value ?: return
 
-        if (groupFnName.contains("~") && groupFnName != "~_") {
+        if (groupFnName.startsWith("~") && groupFnName != "~_") {
             // TODO tilda function
             return
         }
 
-        val asmOpcodes = ASM_EXP_REGEX.findAll(groupAsmExpression).map { it.value.replace("\"", "") }.toList()
+        val instructions = FiftHelper.parseSequence(groupAsmExpression, cp0InstructionRegistry)
 
-        val firstOpcode = asmOpcodes.first()
-
-        if (asmOpcodes.size > 1) {
-//            println("skipping chain: ${asmOpcodes}")
-            // TODO handle chains
-            return
-        }
-        if (firstOpcode.split("\\s+".toRegex()).size > 1) {
-//            println("skipping opcode with arg: ${firstOpcode}")
+        if (instructions.isEmpty()) {
             return
         }
 
-        val instDesc = cp0InstructionRegistry.getByOpcode(firstOpcode) ?: return
+        val chainClasses = instructions.map { cp0InstructionRegistry.getByOpcode(it.opcodeName)!!.instClass }
+        val chainConstraints = instructions.map { it.constraints }
+        val firstInstData = cp0InstructionRegistry.getByOpcode(instructions.first().opcodeName)!!
 
-        registerAsmFunction(
-            registry,
-            instDesc,
-            groupFnName
-        )
+        val explicitFirstConstraints = chainConstraints.firstOrNull() ?: emptyList()
+        val implicitFirstConstraints = firstInstData.implicitOperands.map { (k, v) ->
+            FiftHelper.AsmConstraint(k, v.toString())
+        }
+        val allFirstConstraints = explicitFirstConstraints + implicitFirstConstraints
+
+        val finalOutputs = resolveOutputs(firstInstData)
+
+        val reorg = groupFnArgs?.let { args ->
+            groupAsmDescription?.let { desc -> parseFnReorg(args, desc) }
+        }
+
+        val predicate: InstPredicate = { inputs ->
+            if (inputs.size < chainConstraints.size) false
+            else chainConstraints.withIndex().all { (i, constr) ->
+                val effectiveConstraints = if (i == 0) allFirstConstraints else constr
+                FiftHelper.createPredicate(effectiveConstraints)(listOf(inputs[i]))
+            }
+        }
+
+        val parser = AsmFunctionFactory.create(firstInstData, groupFnName, reorg, allFirstConstraints, overrideOutputs = finalOutputs)
+
+        if (chainClasses.size == 1) {
+            registry.register(chainClasses.first(), ParserLevel.STDLIB, { ctx, inst -> parser(ctx, listOf(inst)) }, predicate)
+        } else {
+            registry.registerChain(chainClasses, ParserLevel.STDLIB, parser, predicate)
+        }
     }
 
     fun registerStdlibInstructions(
@@ -154,124 +112,27 @@ class StdlibRegistry(
         registry: ParserRegistry,
         instData: Cp0InstructionRegistry.InstructionData
     ) {
-        println("checking ${instData.instDescriptionRaw.mnemonic} ${instData.instClass}")
+        val mnemonic = instData.instDescriptionRaw.mnemonic
 
-        val outputStack = (instData.instDescriptionRaw.valueFlow.outputs.stack ?: emptyList()).toMutableList()
-        val status = outputStack.removeLastOrNull()
-        if (status != null && status !is TvmCp0InstValueFlowOutputsEntry.Conditional) {
-            val conditional = outputStack.removeLastOrNull()
-            if (conditional != null && conditional is TvmCp0InstValueFlowOutputsEntry.Conditional) {
-                val status0 = conditional.match.find { it.value == 0L }?.stack
-                val statusn1 = conditional.match.find { it.value == -1L }?.stack
+        val standardOutputs = resolveOutputs(instData)
+        val optOutputs = if (standardOutputs.isNotEmpty()) standardOutputs.dropLast(1) else emptyList()
 
-
-                if (status0 != null && statusn1 != null) {
-                    if (status0.size == statusn1.size && status0.indices.all {
-                        status0[it].contentEquals(statusn1[it])
-                        }) {
-                        registry.register (instData.instClass) { ctx: CodeBlockContext, inst: Any, ident: String ->
-                            TODO()
-                        }
-                        return
-                    }
-
-                    if (statusn1.size == status0.size + 1 && status0.indices.all {
-                        status0[it].contentEquals(statusn1[it])
-                        }) {
-                        registry.registerChain(
-                            listOf(instData.instClass, TvmTupleNullswapifnotInst::class.java),
-                            { ctx: CodeBlockContext, inst: List<*>, ident: String ->
-                                TODO()
-                            }
-                        )
-                        return
-                    }
-                    if (statusn1.size == status0.size + 2 && status0.indices.all {
-                        status0[it].contentEquals(statusn1[it])
-                        }) {
-                        registry.registerChain(
-                            listOf(instData.instClass, TvmTupleNullswapifnot2Inst::class.java),
-                            { ctx: CodeBlockContext, inst: List<*>, ident: String ->
-                                TODO()
-                            }
-                        )
-                        return
-
-                    }
-                    if (statusn1.size == status0.size + 3 && status0.indices.all {
-                        status0[it].contentEquals(statusn1[it])
-                        }) {
-                        registry.registerChain(
-                            listOf(instData.instClass, TvmTupleNullswapifnot2Inst::class.java,TvmTupleNullswapifnotInst::class.java ),
-                            { ctx: CodeBlockContext, inst: List<*>, ident: String ->
-                                TODO()
-                            }
-                        )
-                        registry.registerChain(
-                            listOf(instData.instClass, TvmTupleNullswapifnotInst::class.java,TvmTupleNullswapifnot2Inst::class.java ),
-                            { ctx: CodeBlockContext, inst: List<*>, ident: String ->
-                                TODO()
-                            }
-                        )
-                        return
-                    }
-                    if (status0.size == statusn1.size + 1 && statusn1.indices.all {
-                        statusn1[it].contentEquals(status0[it])
-                        }) {
-                        registry.registerChain(
-                            listOf(instData.instClass, TvmTupleNullswapifInst::class.java),
-                            { ctx: CodeBlockContext, inst: List<*>, ident: String ->
-                                TODO()
-                            }
-                        )
-                        return
-                    }
-                    if (status0.size == statusn1.size + 2 && statusn1.indices.all {
-                        statusn1[it].contentEquals(status0[it])
-                        }) {
-                        registry.registerChain(
-                            listOf(instData.instClass, TvmTupleNullswapif2Inst::class.java),
-                            { ctx: CodeBlockContext, inst: List<*>, ident: String ->
-                                TODO()
-                            }
-                        )
-                        return
-                    }
-                    if (status0.size == statusn1.size + 3 && statusn1.indices.all {
-                        statusn1[it].contentEquals(status0[it])
-                        }) {
-                        registry.registerChain(
-                            listOf(instData.instClass, TvmTupleNullswapif2Inst::class.java, TvmTupleNullswapifInst::class.java),
-                            { ctx: CodeBlockContext, inst: List<*>, ident: String ->
-                                TODO()
-                            }
-                        )
-                        registry.registerChain(
-                            listOf(instData.instClass, TvmTupleNullswapifInst::class.java, TvmTupleNullswapif2Inst::class.java),
-                            { ctx: CodeBlockContext, inst: List<*>, ident: String ->
-                                TODO()
-                            }
-                        )
-                        return
-                    }
-
-                    if (
-                        statusn1.size == status0.size + 1 && status0.indices.all {
-                            status0[it].contentEquals(statusn1[it + 1])
-                        }
-                    ) {
-                        registry.registerChain(
-                            listOf(instData.instClass, TvmTupleNullrotrifnotInst::class.java),
-                            { ctx: CodeBlockContext, inst: List<*>, ident: String ->
-                                TODO()
-                            }
-                        )
-                        return
-                    }
-                }
-            }
+        fun regChain(suffix: String, chain: List<Class<out TvmInst>>) {
+            val fullChain = listOf(instData.instClass) + chain
+            val parser = AsmFunctionFactory.create(
+                instData,
+                "asm_${mnemonic}_$suffix",
+                null,
+                overrideOutputs = optOutputs,
+                constraints = emptyList(),
+            )
+            @Suppress("UNCHECKED_CAST")
+            registry.registerChain(fullChain, ParserLevel.RAW_ASM, parser as InstParserFull<List<*>>)
         }
-        println("Unknown conditional instruction: ${instData.instDescriptionRaw.mnemonic}")
+
+        regChain("opt", listOf(TvmTupleNullswapifnotInst::class.java))
+        regChain("opt2", listOf(TvmTupleNullswapifnot2Inst::class.java))
+
     }
 
     fun registerSimpleAsmInstructions(
@@ -280,35 +141,98 @@ class StdlibRegistry(
         val processed = mutableSetOf<Class<out TvmInst>>()
 
         for ((_, instData) in cp0InstructionRegistry.instructions) {
-            if (processed.contains(instData.instClass)) {
-                continue
-            } else {
-                processed += instData.instClass
-            }
+            if (!processed.add(instData.instClass)) continue
 
-            if (registry.getParser(instData.instClass) == null) {
+            if (!registry.hasNonConditionalParser(instData.instClass)) {
                 val instDescRaw = instData.instDescriptionRaw
                 if (instDescRaw.controlFlow.branches.isNotEmpty()) {
-                    println("Skipping ${instDescRaw.mnemonic}: control flow branches")
                     continue
                 }
-                if (instDescRaw.doc?.category == "stack" || instDescRaw.doc?.category == "stack_complex") {
-                    println("Skipping ${instDescRaw.mnemonic}: stack")
+                if ((instDescRaw.doc?.category == "stack" || instDescRaw.doc?.category == "stack_complex") && instDescRaw.mnemonic !in listOf(
+                        "DEPTH",
+                        "CHKDEPTH"
+                    )
+                ) {
                     continue
                 }
 
-                if ((instData.instDescriptionRaw.valueFlow.outputs.stack ?: emptyList()).any { it is TvmCp0InstValueFlowOutputsEntry.Conditional }) {
+                val hasConditionalOutputs = (instData.instDescriptionRaw.valueFlow.outputs.stack
+                        ?: emptyList()).any { it is TvmCp0InstValueFlowOutputsEntry.Conditional }
+
+                if (hasConditionalOutputs) {
                     processConditionalInstruction(registry, instData)
-                    continue
+                    if (!hasUniformConditionalOutputs(instData)) {
+                        continue
+                    }
                 }
 
-                // no parser
                 registerAsmFunction(
                     registry,
                     instData,
-                    "asm_${instData.instDescriptionRaw.mnemonic}"
+                    "asm_${instDescRaw.mnemonic}",
+                    null,
+                    ParserLevel.RAW_ASM,
+                    overrideOutputs = if (hasConditionalOutputs) resolveOutputs(instData) else null
                 )
             }
         }
+    }
+
+    private fun registerAsmFunction(
+        registry: ParserRegistry,
+        instData: Cp0InstructionRegistry.InstructionData,
+        name: String,
+        reorg: AsmFunctionFactory.Reorg?,
+        level: ParserLevel,
+        overrideOutputs: List<TvmCp0InstValueFlowOutputsEntry>? = null
+    ) {
+        try {
+            val parser = AsmFunctionFactory.create(instData, name, reorg, emptyList(), overrideOutputs = overrideOutputs)
+            registry.register(instData.instClass, level, { ctx, inst -> parser(ctx, listOf(inst)) })
+        } catch (e: Throwable) {
+            if (e.message?.contains("Inst redefinition") == true) return
+            throw e
+        }
+    }
+
+    private fun hasUniformConditionalOutputs(
+        instData: Cp0InstructionRegistry.InstructionData
+    ): Boolean {
+        val outputs = instData.instDescriptionRaw.valueFlow.outputs.stack ?: return true
+        val conditionals = outputs.filterIsInstance<TvmCp0InstValueFlowOutputsEntry.Conditional>()
+        return conditionals.all { cond ->
+            val branches = cond.match.map { it.stack ?: emptyList() }
+            if (branches.size < 2) return@all true
+            val first = branches.first()
+            branches.drop(1).all { branch ->
+                branch.size == first.size &&
+                    branch.zip(first).all { (a, b) -> a.contentEquals(b) }
+            }
+        }
+    }
+
+    private fun resolveOutputs(
+        instData: Cp0InstructionRegistry.InstructionData
+    ): List<TvmCp0InstValueFlowOutputsEntry> {
+        val rawOutputs = instData.instDescriptionRaw.valueFlow.outputs.stack ?: return emptyList()
+
+        val condEntry = rawOutputs.filterIsInstance<TvmCp0InstValueFlowOutputsEntry.Conditional>().lastOrNull()
+
+        if (condEntry == null) return rawOutputs
+
+        val prefix = rawOutputs.takeWhile { it !== condEntry }
+
+        val successMatch = condEntry.match.find { it.value == -1L }
+            ?: condEntry.match.maxByOrNull { it.stack?.size ?: 0 }
+            ?: return prefix
+
+        val successValues = successMatch.stack ?: emptyList()
+
+        val flagOutput = TvmCp0InstValueFlowOutputsEntry.Simple(
+            name = condEntry.name,
+            valueTypes = listOf(Cp0InstructionRegistry.TvmCp0InstStackEntryType.INT)
+        )
+
+        return prefix + successValues + flagOutput
     }
 }

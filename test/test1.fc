@@ -1,5 +1,0 @@
-#include "stdlib.fc";
-
-() recv_internal(int msg_value, cell in_msg_cell, slice in_msg) impure {
-    (int a, slice b) = load_uint(in_msg, 32);
-}

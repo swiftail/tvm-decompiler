@@ -14,10 +14,10 @@ int _^%_(int x, int y) asm "MODC";
 (int, int) ~divmod(int x, int y) asm "DIVMOD";
 (int, int) moddiv(int x, int y) asm(x y -> 1 0) "DIVMOD";
 (int, int) ~moddiv(int x, int y) asm(x y -> 1 0) "DIVMOD";
-int _<<_(int x, int y) asm "LSHIFT";
-int _>>_(int x, int y) asm "RSHIFT";
-int _~>>_(int x, int y) asm "RSHIFTR";
-int _^>>_(int x, int y) asm "RSHIFTC";
+int _<<_(int x, int y) asm "LSHIFT_VAR";
+int _>>_(int x, int y) asm "RSHIFT_VAR";
+int _~>>_(int x, int y) asm "RSHIFTR_VAR";
+int _^>>_(int x, int y) asm "RSHIFTC_VAR";
 int _&_(int x, int y) asm "AND";
 int _|_(int x, int y) asm "OR";
 int _^_(int x, int y) asm "XOR";
@@ -55,13 +55,13 @@ forall X -> int null?(X x) asm "ISNULL";
 ;;;
 ;;; In other words, it transfers control to the continuation in `c2`,
 ;;; pushing `0` and [`excno`] into it's stack, and discarding the old stack altogether.
-() throw(int excno) impure asm "THROW";
+() throw(int excno) impure asm "THROWANY";
 
 ;;; Throws exception [`excno`] with parameter zero only if [`cond`] != `0`.
-() throw_if(int excno, int cond) impure asm "THROWARGIF";
+() throw_if(int excno, int cond) impure asm "THROWANYIF";
 
 ;;; Throws exception [`excno`] with parameter zero only if [`cond`] == `0`.
-() throw_unless(int excno, int cond) impure asm "THROWARGIFNOT";
+() throw_unless(int excno, int cond) impure asm "THROWANYIFNOT";
 
 ;;; Throws exception [`excno`] with parameter [`x`],
 ;;; by copying [`x`] and [`excno`] into the stack of `c2` and transferring control to `c2`.
@@ -134,10 +134,10 @@ forall X -> (X, ()) ~dump(X x) impure asm "s0 DUMP";
 ;;; Dump string [x] to the debug log.
 forall X -> (X, ()) ~strdump(X x) impure asm "STRDUMP";
 
-() run_method0(int id) impure asm "0 CALLXARGS";
+() run_method0(int id) impure asm "0 CALLXARGS_VAR";
 
-forall X -> () run_method1(int id, X x) impure asm(x id) "1 CALLXARGS";
+forall X -> () run_method1(int id, X x) impure asm(x id) "1 CALLXARGS_VAR";
 
-forall X, Y -> () run_method2(int id, X x, Y y) impure asm(x y id) "2 CALLXARGS";
+forall X, Y -> () run_method2(int id, X x, Y y) impure asm(x y id) "2 CALLXARGS_VAR";
 
-forall X, Y, Z -> () run_method3(int id, X x, Y y, Z z) impure asm(x y z id) "3 CALLXARGS";
+forall X, Y, Z -> () run_method3(int id, X x, Y y, Z z) impure asm(x y z id) "3 CALLXARGS_VAR";

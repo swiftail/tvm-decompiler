@@ -1,14 +1,12 @@
 package io.swee.tvm.decompiler
 
-import io.swee.tvm.decompiler.api.TvmDecompiler
 import io.swee.tvm.decompiler.api.TvmDecompilerFacade
-import io.swee.tvm.decompiler.api.TvmDecompilerResult
-import io.swee.tvm.decompiler.internal.TvmDecompilerImpl
+import io.swee.tvm.decompiler.cli.TvmDecompilerFacadeImpl
 
 object TvmDecompilerLib {
     fun facade(
-        stdlibContent: String?
+        stdlibContent: String? = null
     ): TvmDecompilerFacade {
-        TODO()
+        return TvmDecompilerFacadeImpl
     }
 }

@@ -19,7 +19,8 @@ class Cp0InstructionRegistry private constructor(
 ) {
     data class InstructionData(
         val instDescriptionRaw: TvmCp0Inst,
-        val instClass: Class<out TvmInst>
+        val instClass: Class<out TvmInst>,
+        val implicitOperands: Map<String, Any> = emptyMap()
     )
 
     fun getByOpcode(asmOpcodeName: String): InstructionData? {
@@ -35,6 +36,7 @@ class Cp0InstructionRegistry private constructor(
     data class TvmCp0InstValueFlowInputsStackEntry(
         val type: String,
         val name: String?,
+        val lengthVar: String?,
         val valueTypes: List<TvmCp0InstStackEntryType>?
     )
 
@@ -61,7 +63,8 @@ class Cp0InstructionRegistry private constructor(
         @JsonIgnoreProperties(ignoreUnknown = true)
         data class Simple(
             val name: String?,
-            val valueTypes: List<TvmCp0InstStackEntryType>?
+            val valueTypes: List<TvmCp0InstStackEntryType>?,
+            val tupleElements: List<TvmCp0InstStackEntryType>? = null
         ) : TvmCp0InstValueFlowOutputsEntry() {
             override fun contentEquals(other: TvmCp0InstValueFlowOutputsEntry): Boolean {
                 return other is Simple && valueTypes?.filterNot { it.name == "NULL" } == other.valueTypes?.filterNot { it.name == "NULL" }
@@ -234,90 +237,10 @@ class Cp0InstructionRegistry private constructor(
     companion object {
         fun create(): Cp0InstructionRegistry {
             val jsonInstructions: TvmCp0Data = ObjectMapper().registerModule(KotlinModule.Builder().build()).readValue(
-                TvmInst::class.java.getResourceAsStream("/cp0.json")
+                Cp0InstructionRegistry::class.java.getResourceAsStream("/cp0_fixed.json")
                     .readAllBytes(),
                 TvmCp0Data::class.java
             )
-
-            val jsonInstructionsByName = jsonInstructions.instructions.associateBy {
-                it.mnemonic.uppercase()
-            }.toMutableMap()
-
-            val aliases: MutableMap<String, MutableSet<String>> =
-                jsonInstructionsByName.keys.map { it to mutableSetOf(it) }.toMap().toMutableMap()
-
-            for (item in jsonInstructions.aliases) {
-                if (item.operands?.size != 0) {
-                    continue
-                }
-
-                jsonInstructionsByName[item.aliasOf]?.let {
-                    jsonInstructionsByName[item.mnemonic.uppercase()] = it
-                    aliases[item.aliasOf]!!.add(item.mnemonic.uppercase())
-                    aliases[item.mnemonic.uppercase()] = aliases[item.aliasOf]!!
-                }
-                jsonInstructionsByName[item.mnemonic]?.let {
-                    jsonInstructionsByName[item.aliasOf.uppercase()] = it
-                    aliases[item.mnemonic]!!.add(item.mnemonic.uppercase())
-                    aliases[item.aliasOf.uppercase()] = aliases[item.mnemonic]!!
-                }
-            }
-            for (item in jsonInstructions.instructions) {
-                val fift = item.doc?.fift ?: continue
-
-                for (line1 in fift.lineSequence().map { it.trim().uppercase() }) {
-                    for (line2 in fift.lineSequence().map { it.trim().uppercase() }) {
-                        if (line1 != line2) {
-                            jsonInstructionsByName[line1]?.let {
-                                jsonInstructionsByName[line2] = it
-                                aliases[line1]!!.add(line2)
-                                aliases[line2] = aliases[line1]!!
-                            }
-                            jsonInstructionsByName[line2]?.let {
-                                jsonInstructionsByName[line1] = it
-                                aliases[line2]!!.add(line1)
-                                aliases[line1] = aliases[line2]!!
-                            }
-                        }
-                    }
-                }
-            }
-            for (item in jsonInstructions.aliases) {
-                if (item.operands?.size != 0) {
-                    continue
-                }
-
-                jsonInstructionsByName[item.aliasOf]?.let {
-                    jsonInstructionsByName[item.mnemonic.uppercase()] = it
-                    aliases[item.aliasOf]!!.add(item.mnemonic.uppercase())
-                    aliases[item.mnemonic.uppercase()] = aliases[item.aliasOf]!!
-                }
-                jsonInstructionsByName[item.mnemonic]?.let {
-                    jsonInstructionsByName[item.aliasOf.uppercase()] = it
-                    aliases[item.mnemonic]!!.add(item.mnemonic.uppercase())
-                    aliases[item.aliasOf.uppercase()] = aliases[item.mnemonic]!!
-                }
-            }
-            for (item in jsonInstructions.instructions) {
-                val fift = item.doc?.fift ?: continue
-
-                for (line1 in fift.lineSequence().map { it.trim().uppercase() }) {
-                    for (line2 in fift.lineSequence().map { it.trim().uppercase() }) {
-                        if (line1 != line2) {
-                            jsonInstructionsByName[line1]?.let {
-                                jsonInstructionsByName[line2] = it
-                                aliases[line1]!!.add(line2)
-                                aliases[line2] = aliases[line1]!!
-                            }
-                            jsonInstructionsByName[line2]?.let {
-                                jsonInstructionsByName[line1] = it
-                                aliases[line2]!!.add(line1)
-                                aliases[line1] = aliases[line2]!!
-                            }
-                        }
-                    }
-                }
-            }
 
             val libInstructions: Map<String, Class<TvmInst>> = Reflections("org.ton.bytecode")
                 .get(
@@ -331,18 +254,73 @@ class Cp0InstructionRegistry private constructor(
                     opName to klass
                 }.toMap() as Map<String, Class<TvmInst>>
 
-            val libInstructionsByName: Map<String, InstructionData> = jsonInstructionsByName.map { (name, jsonInst) ->
-                val aliasData = aliases[name]!!.firstNotNullOf {
-                    val libInst = libInstructions[it] ?: return@firstNotNullOf null
-                    InstructionData(jsonInst, libInst)
-                }
-                name to aliasData
-            }.toMap()
+            val baseInstructionsJson = jsonInstructions.instructions.associateBy { it.mnemonic.uppercase() }
+            val resultMap = mutableMapOf<String, InstructionData>()
 
-            val instructionClassToOpcode = libInstructionsByName.entries.associate { it.value.instClass to it.key }
+            fun findClassFor(mnemonic: String, fiftDoc: String?): Class<out TvmInst>? {
+                libInstructions[mnemonic]?.let { return it }
+                if (fiftDoc != null) {
+                    val firstFiftWord = fiftDoc.trim().split("\\s+".toRegex()).firstOrNull()?.uppercase()
+                    if (firstFiftWord != null && firstFiftWord != mnemonic) {
+                        libInstructions[firstFiftWord]?.let { return it }
+                    }
+                }
+                return null
+            }
+
+            for (inst in jsonInstructions.instructions) {
+                val mnemonic = inst.mnemonic.uppercase()
+                val clazz = findClassFor(mnemonic, inst.doc?.fift)
+
+                if (clazz != null) {
+                    val data = InstructionData(inst, clazz, emptyMap())
+                    resultMap[mnemonic] = data
+
+                    inst.doc?.fift?.trim()?.split("\\s+".toRegex())?.forEach { token ->
+                        val key = token.uppercase()
+                        if (key.isNotEmpty() && !resultMap.containsKey(key)) {
+                            resultMap[key] = data
+                        }
+                    }
+                }
+            }
+
+            for (alias in jsonInstructions.aliases) {
+                val aliasMnemonic = alias.mnemonic.uppercase()
+                val targetMnemonic = alias.aliasOf.uppercase()
+
+                var targetData = resultMap[targetMnemonic]
+
+                if (targetData == null) {
+                    val targetJson = baseInstructionsJson[targetMnemonic]
+                    if (targetJson != null) {
+                        val targetClass = findClassFor(targetMnemonic, targetJson.doc?.fift)
+                        if (targetClass != null) {
+                            targetData = InstructionData(targetJson, targetClass, emptyMap())
+                            resultMap[targetMnemonic] = targetData
+                        }
+                    }
+                }
+
+                if (targetData != null) {
+                    val newImplicitOperands = alias.operands ?: emptyMap()
+                    val mergedOperands = targetData.implicitOperands + newImplicitOperands
+
+                    val aliasData = InstructionData(
+                        instDescriptionRaw = targetData.instDescriptionRaw,
+                        instClass = targetData.instClass,
+                        implicitOperands = mergedOperands
+                    )
+                    resultMap[aliasMnemonic] = aliasData
+                }
+            }
+
+            val instructionClassToOpcode = resultMap.entries
+                .filter { it.value.implicitOperands.isEmpty() }
+                .associate { it.value.instClass to it.key }
 
             return Cp0InstructionRegistry(
-                libInstructionsByName,
+                resultMap,
                 instructionClassToOpcode
             )
         }
