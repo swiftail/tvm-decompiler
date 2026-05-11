@@ -134,9 +134,11 @@ object TvmDecompilerImpl : TvmDecompiler {
             }
         val signatures = inferSignatures(augmentedMethods, registry, entryPointSignatures, callrefMapping)
 
-        val callrefFunctionNodes = callrefMapping.map { (instList, syntheticId) ->
-            parseCallrefFunction(registry, instList, syntheticId, signatures, callrefMapping)
-        }
+        val callrefFunctionNodes = callrefMapping.entries
+            .distinctBy { it.value }
+            .map { (instList, syntheticId) ->
+                parseCallrefFunction(registry, instList, syntheticId, signatures, callrefMapping)
+            }
 
         val functionNodes = header.functions.map {
             parseFunction(registry, it.value, signatures, callrefMapping)

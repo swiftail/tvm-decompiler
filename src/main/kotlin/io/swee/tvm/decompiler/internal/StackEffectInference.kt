@@ -19,13 +19,43 @@ data class CallrefExtractionResult(
 
 fun extractCallrefBodies(methods: Map<BigInteger, List<TvmInst>>): CallrefExtractionResult {
     val callrefMapping = HashMap<List<TvmInst>, BigInteger>()
+
+    val fingerprintToId = HashMap<String, BigInteger>()
     var nextId = -1000L
+
+    fun fingerprint(instList: List<TvmInst>): String = buildString {
+        for (inst in instList) {
+            append(inst.mnemonic)
+            val s = inst.toString()
+            val noLoc = s.replace(Regex("""location=[^,)]+"""), "")
+            append(noLoc)
+            if (inst is TvmContOperand1Inst) {
+                append("{")
+                append(fingerprint(inst.c))
+                append("}")
+            }
+            if (inst is TvmContOperand2Inst) {
+                append("{")
+                append(fingerprint(inst.c1))
+                append("|")
+                append(fingerprint(inst.c2))
+                append("}")
+            }
+            append(";")
+        }
+    }
 
     fun scan(instList: List<TvmInst>) {
         for (inst in instList) {
             if (inst is TvmContBasicCallrefInst) {
-                if (inst.c !in callrefMapping) {
-                    callrefMapping[inst.c] = BigInteger.valueOf(nextId--)
+                val fp = fingerprint(inst.c)
+                val existingId = fingerprintToId[fp]
+                if (existingId != null) {
+                    callrefMapping[inst.c] = existingId
+                } else {
+                    val newId = BigInteger.valueOf(nextId--)
+                    fingerprintToId[fp] = newId
+                    callrefMapping[inst.c] = newId
                 }
             }
             if (inst is TvmContOperand1Inst) {
@@ -44,7 +74,9 @@ fun extractCallrefBodies(methods: Map<BigInteger, List<TvmInst>>): CallrefExtrac
 
     val augmentedMethods = methods.toMutableMap()
     for ((instList, id) in callrefMapping) {
-        augmentedMethods[id] = instList
+        if (id !in augmentedMethods) {
+            augmentedMethods[id] = instList
+        }
     }
 
     return CallrefExtractionResult(augmentedMethods, callrefMapping)
