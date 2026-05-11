@@ -3,10 +3,11 @@ import java.io.File
 plugins {
     kotlin("jvm") version "2.1.0"
     application
-    `maven-publish`
     id("com.gradleup.shadow") version "9.0.0-beta12"
     id("org.jetbrains.kotlin.plugin.serialization") version "1.9.22"
 }
+
+pluginManager.apply("maven-publish")
 
 group = "io.swee"
 version = "1.0-SNAPSHOT"
@@ -20,7 +21,7 @@ application {
     mainClass = "io.swee.tvm.decompiler.MainKt"
 }
 
-publishing {
+configure<PublishingExtension> {
     publications {
         create<MavenPublication>("maven") {
             groupId = project.group.toString()
