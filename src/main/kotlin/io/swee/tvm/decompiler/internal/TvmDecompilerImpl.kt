@@ -69,10 +69,13 @@ object TvmDecompilerImpl : TvmDecompiler {
         })
     }
 
-    override fun decompile(boc: ByteArray): TvmDecompilerResult {
-        val stdlibContent = TvmDecompilerImpl::class.java.getResourceAsStream("/stdlib.fc")!!.use {
+    private val stdlibContent: String by lazy {
+        TvmDecompilerImpl::class.java.getResourceAsStream("/stdlib.fc")!!.use {
             it.readAllBytes().toString(Charset.defaultCharset())
         }
+    }
+
+    private val registry: ParserRegistry by lazy {
         val builtinContent = TvmDecompilerImpl::class.java.getResourceAsStream("/builtin.fc")!!.use {
             it.readAllBytes().toString(Charset.defaultCharset())
         }
@@ -100,6 +103,12 @@ object TvmDecompilerImpl : TvmDecompiler {
         stdlibRegistry.registerSimpleAsmInstructions(registry)
 
         registry.dumpUnknownInstructions()
+
+        registry
+    }
+
+    override fun decompile(boc: ByteArray): TvmDecompilerResult {
+        val registry = this.registry
 
         val disassembly = disassembleBoc(boc)
 
