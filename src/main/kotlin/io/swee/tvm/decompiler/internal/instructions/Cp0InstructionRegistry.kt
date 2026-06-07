@@ -21,7 +21,14 @@ class Cp0InstructionRegistry private constructor(
         val instDescriptionRaw: TvmCp0Inst,
         val instClass: Class<out TvmInst>,
         val implicitOperands: Map<String, Any> = emptyMap()
-    )
+    ) {
+        fun isPure(): Boolean {
+            val vf = instDescriptionRaw.valueFlow
+            return vf.inputs.registers.isNullOrEmpty() &&
+                vf.outputs.registers.isNullOrEmpty() &&
+                instDescriptionRaw.controlFlow.nobranch
+        }
+    }
 
     fun getByOpcode(asmOpcodeName: String): InstructionData? {
         return instructions[asmOpcodeName]

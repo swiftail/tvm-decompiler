@@ -20,9 +20,18 @@ sealed interface IRNode {
 
     class Root(
         val asmFunctions: List<AsmFunction>,
-        val functions: List<Function>
+        val functions: List<Function>,
+        val constants: List<ConstSliceDecl> = emptyList()
     ) : IRNode {
-        override fun directChildren() = asmFunctions + functions
+        override fun directChildren() = constants + asmFunctions + functions
+        override fun accept0(visitor: IRNodeVisitor) = visitor.visit(this)
+    }
+
+    class ConstSliceDecl(val name: String, val literal: String) : IRNode {
+        override fun accept0(visitor: IRNodeVisitor) = visitor.visit(this)
+    }
+
+    class SliceConstRef(val name: String) : IRNode {
         override fun accept0(visitor: IRNodeVisitor) = visitor.visit(this)
     }
 
@@ -98,7 +107,8 @@ sealed interface IRNode {
     class FunctionCall(
         val name: String,
         val args: List<IRNode>,
-        val asmBody: String? = null
+        val asmBody: String? = null,
+        val pure: Boolean = false
     ) : IRNode {
         override fun directChildren() = args
         override fun accept0(visitor: IRNodeVisitor) = visitor.visit(this)

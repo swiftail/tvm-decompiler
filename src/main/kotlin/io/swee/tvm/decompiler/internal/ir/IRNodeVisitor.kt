@@ -13,6 +13,8 @@ interface IRNodeVisitor {
     fun visit(node: IRNode.VariableDeclaration) = visitAny(node)
     fun visit(node: IRNode.IntLiteral) = visitAny(node)
     fun visit(node: IRNode.SliceLiteral) = visitAny(node)
+    fun visit(node: IRNode.ConstSliceDecl) = visitAny(node)
+    fun visit(node: IRNode.SliceConstRef) = visitAny(node)
     fun visit(node: IRNode.Comment) = visitAny(node)
     fun visit(node: IRNode.FunctionReturnStatement) = visitAny(node)
     fun visit(node: IRNode.FunctionCall) = visitAny(node)

@@ -74,6 +74,10 @@ class StdlibRegistry(
 
         val finalOutputs = resolveOutputs(firstInstData)
 
+        val functionPure = instructions.all {
+            cp0InstructionRegistry.getByOpcode(it.opcodeName)!!.isPure()
+        }
+
         val reorg = groupFnArgs?.let { args ->
             groupAsmDescription?.let { desc -> parseFnReorg(args, desc) }
         }
@@ -86,7 +90,7 @@ class StdlibRegistry(
             }
         }
 
-        val parser = AsmFunctionFactory.create(firstInstData, groupFnName, reorg, allFirstConstraints, overrideOutputs = finalOutputs)
+        val parser = AsmFunctionFactory.create(firstInstData, groupFnName, reorg, allFirstConstraints, overrideOutputs = finalOutputs, pure = functionPure)
 
         if (chainClasses.size == 1) {
             registry.register(chainClasses.first(), ParserLevel.STDLIB, { ctx, inst -> parser(ctx, listOf(inst)) }, predicate)
@@ -187,7 +191,7 @@ class StdlibRegistry(
         overrideOutputs: List<TvmCp0InstValueFlowOutputsEntry>? = null
     ) {
         try {
-            val parser = AsmFunctionFactory.create(instData, name, reorg, emptyList(), overrideOutputs = overrideOutputs)
+            val parser = AsmFunctionFactory.create(instData, name, reorg, emptyList(), overrideOutputs = overrideOutputs, pure = instData.isPure())
             registry.register(instData.instClass, level, { ctx, inst -> parser(ctx, listOf(inst)) })
         } catch (e: Throwable) {
             if (e.message?.contains("Inst redefinition") == true) return

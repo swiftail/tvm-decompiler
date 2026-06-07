@@ -1,39 +1,46 @@
 package io.swee.tvm.decompiler.internal
 
 import io.swee.tvm.decompiler.internal.instructions.Cp0InstructionRegistry
-import io.swee.tvm.decompiler.internal.ir.IRNode
+import org.ton.bytecode.TvmCell
+import org.ton.bytecode.TvmCellBuildEndcInst
+import org.ton.bytecode.TvmCellBuildNewcInst
+import org.ton.bytecode.TvmCellData
+import org.ton.bytecode.TvmConstDataPushsliceInst
+import org.ton.bytecode.TvmConstIntPushint4Inst
+import org.ton.bytecode.TvmInst
+import org.ton.bytecode.TvmInstLocation
+import org.ton.bytecode.TvmMainMethodLocation
+import org.ton.bytecode.TvmTupleNullInst
+import org.ton.disasm.TvmPhysicalInstLocation
+
+private val DEFAULT_LOC: TvmInstLocation = TvmMainMethodLocation(0)
+private val DEFAULT_PHYS = TvmPhysicalInstLocation("", 0)
+
+private fun newc() = TvmCellBuildNewcInst(DEFAULT_LOC, DEFAULT_PHYS)
+private fun endc() = TvmCellBuildEndcInst(DEFAULT_LOC, DEFAULT_PHYS)
+private fun pushNull() = TvmTupleNullInst(DEFAULT_LOC, DEFAULT_PHYS)
+private fun pushInt0() = TvmConstIntPushint4Inst(DEFAULT_LOC, DEFAULT_PHYS, 0)
+private fun pushEmptySlice() =
+    TvmConstDataPushsliceInst(DEFAULT_LOC, DEFAULT_PHYS, TvmCell(TvmCellData(""), emptyList()))
 
 sealed class TvmStackEntryType(val typename: String) {
 
     open val funcTypename: String get() = typename
 
-    // todo need to call actual stuff from stdlib here :(
     data object SLICE : TvmStackEntryType("slice") {
-        override fun default(): String {
-            return "\"\"";
-        }
+        override fun default(): List<TvmInst> = listOf(pushEmptySlice())
     }
     data object CELL : TvmStackEntryType("cell") {
-        // TODO
-        override fun default(): String {
-            return "begin_cell().end_cell()"
-        }
+        override fun default(): List<TvmInst> = listOf(newc(), endc())
     }
     data object INT : TvmStackEntryType("int") {
-        override fun default(): String {
-            return "0"
-        }
+        override fun default(): List<TvmInst> = listOf(pushInt0())
     }
     data object BUILDER : TvmStackEntryType("builder") {
-        // TODO
-        override fun default(): String {
-            return "begin_cell()"
-        }
+        override fun default(): List<TvmInst> = listOf(newc())
     }
     data object CONTINUATION : TvmStackEntryType("continuation") {
-        override fun default(): String {
-            return "null()"
-        }
+        override fun default(): List<TvmInst> = listOf(pushNull())
     }
 
     data class TUPLE(
@@ -46,18 +53,14 @@ sealed class TvmStackEntryType(val typename: String) {
         override val funcTypename: String
             get() = if (elements.isNotEmpty()) "[${elements.joinToString(", ") { it.funcTypename }}]" else "tuple"
 
-        override fun default(): String {
-            return "[${elements.joinToString(", ") { it.default() }}]"
-        }
+        override fun default(): List<TvmInst> = listOf(pushNull())
     }
 
     data object UNKNOWN : TvmStackEntryType("var") {
-        override fun default(): String {
-            return "null()"
-        }
+        override fun default(): List<TvmInst> = listOf(pushNull())
     }
 
-    abstract fun default(): String
+    abstract fun default(): List<TvmInst>
 
     companion object {
         fun fromTvmStackEntryDescription(value: Cp0InstructionRegistry.TvmCp0InstValueFlowOutputsEntry.Simple): TvmStackEntryType {

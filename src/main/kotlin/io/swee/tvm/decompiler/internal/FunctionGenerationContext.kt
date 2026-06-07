@@ -19,6 +19,7 @@ data class FunctionGenerationContext(
     val stackEntrySources: Map<StackEntry, List<IRNode>>,
     val stackEntryProducts: Map<IRNode, VariableDeclaration>,
     val expressionDeclarations: Set<VariableDeclaration>,
+    val loopScopes: LoopScopeMap,
 )
 
 fun analyzeFunction(
@@ -73,14 +74,32 @@ fun analyzeFunction(
         stackEntrySources,
         stackEntryProducts,
         setOf(),
+        analyzeLoopScopes(function.codeBlock),
     )
 }
 
-fun analyze(root: IRNode.Root): RootGenerationContext {
+class SliceConstantPool {
+    private val names = LinkedHashMap<String, String>()
+
+    fun intern(literal: String): String =
+        names.getOrPut(literal) { "__const_${names.size.toString(16).padStart(2, '0')}" }
+
+    fun declarations(): List<Pair<String, String>> =
+        names.entries.map { it.value to it.key }
+}
+
+fun analyze(root: IRNode.Root, options: DecompilerOptions = DecompilerOptions()): RootGenerationContext {
     val sliceDeclarations = mutableMapOf<TvmCell, Int>()
+    val constPool = SliceConstantPool()
 
     val transformer = object : IRNodeTransformer {
         override fun transformSliceLiteral(node: IRNode.SliceLiteral): IRNode {
+            if (!options.exact) {
+                val literal = SliceLiteralChooser.sliceToFuncLiteral(node.slice)
+                if (literal != null) {
+                    return IRNode.SliceConstRef(constPool.intern(literal))
+                }
+            }
             val sliceIndex = sliceDeclarations.merge(
                 node.slice,
                 sliceDeclarations.size,
@@ -103,41 +122,62 @@ fun analyze(root: IRNode.Root): RootGenerationContext {
         )
     }
 
-    val asmFunctionUsages = mutableMapOf<String, IRNode.AsmFunction>()
     val argNames = listOf("a", "b", "c", "d", "e", "f", "g", "h")
+    val asmBody = LinkedHashMap<String, String>()
+    val asmArgTypes = mutableMapOf<String, MutableMap<Int, TvmStackEntryType?>>()
+    val asmArgCount = mutableMapOf<String, Int>()
+    val asmRetTypes = mutableMapOf<String, MutableMap<Int, TvmStackEntryType?>>()
+    val asmRetCount = mutableMapOf<String, Int>()
+
+    fun normalize(t: TvmStackEntryType?): TvmStackEntryType? =
+        t?.takeUnless { it == TvmStackEntryType.UNKNOWN }
+
+    fun recordAsmCall(name: String, body: String, argNodes: List<IRNode>, retEntries: List<StackEntry>) {
+        asmBody.putIfAbsent(name, body)
+        asmArgCount[name] = maxOf(asmArgCount.getOrDefault(name, 0), argNodes.size)
+        val am = asmArgTypes.getOrPut(name) { mutableMapOf() }
+        argNodes.forEachIndexed { i, arg ->
+            val t = (arg as? IRNode.VariableUsage)?.entry?.type
+            am[i] = TypeLattice.join(am[i], normalize(t))
+        }
+        if (retEntries.isNotEmpty()) {
+            asmRetCount[name] = maxOf(asmRetCount.getOrDefault(name, 0), retEntries.size)
+            val rm = asmRetTypes.getOrPut(name) { mutableMapOf() }
+            retEntries.forEachIndexed { i, e -> rm[i] = TypeLattice.join(rm[i], normalize(e.type)) }
+        }
+    }
+
     transformedRoot.accept(object : IRNodeVisitor {
         override fun visit(node: VariableDeclaration) {
             val call = node.value as? IRNode.FunctionCall ?: return
-            if (!call.name.startsWith("asm_") || call.name in asmFunctionUsages) return
+            if (!call.name.startsWith("asm_")) return
             val body = call.asmBody ?: "\"${call.name.removePrefix("asm_")}\""
-            asmFunctionUsages[call.name] = IRNode.AsmFunction(
-                call.name,
-                call.args.mapIndexed { i, arg ->
-                    val type = (arg as IRNode.VariableUsage).entry.type
-                    StackEntry.Simple(type, StackEntryName.Const(argNames.getOrElse(i) { "x$i" }))
-                },
-                node.entries.map { StackEntry.Simple(it.type, StackEntryName.Const("r")) },
-                body
-            )
+            recordAsmCall(call.name, body, call.args, node.entries)
         }
         override fun visit(node: IRNode.FunctionCall) {
-            if (!node.name.startsWith("asm_") || node.name in asmFunctionUsages) return
+            if (!node.name.startsWith("asm_")) return
             val body = node.asmBody ?: "\"${node.name.removePrefix("asm_")}\""
-            asmFunctionUsages[node.name] = IRNode.AsmFunction(
-                node.name,
-                node.args.mapIndexed { i, arg ->
-                    val type = (arg as IRNode.VariableUsage).entry.type
-                    StackEntry.Simple(type, StackEntryName.Const(argNames.getOrElse(i) { "x$i" }))
-                },
-                listOf(),
-                body
-            )
+            recordAsmCall(node.name, body, node.args, listOf())
         }
     })
 
+    val asmFunctionUsages: Map<String, IRNode.AsmFunction> = asmBody.keys.associateWith { name ->
+        val args = (0 until asmArgCount.getOrDefault(name, 0)).map { i ->
+            val t = asmArgTypes[name]?.get(i) ?: TvmStackEntryType.UNKNOWN
+            StackEntry.Simple(t, StackEntryName.Const(argNames.getOrElse(i) { "x$i" }))
+        }
+        val rets = (0 until asmRetCount.getOrDefault(name, 0)).map { i ->
+            val t = asmRetTypes[name]?.get(i) ?: TvmStackEntryType.UNKNOWN
+            StackEntry.Simple(t, StackEntryName.Const("r"))
+        }
+        IRNode.AsmFunction(name, args, rets, asmBody.getValue(name))
+    }
+
     val newRoot = IRNode.Root(
         transformedRoot.asmFunctions + newAsmFunctions + asmFunctionUsages.values,
-        transformedRoot.functions
+        transformedRoot.functions,
+        transformedRoot.constants +
+            constPool.declarations().map { (name, literal) -> IRNode.ConstSliceDecl(name, literal) }
     )
 
     val functionContexts = newRoot.functions.associateWith { analyzeFunction(it) }

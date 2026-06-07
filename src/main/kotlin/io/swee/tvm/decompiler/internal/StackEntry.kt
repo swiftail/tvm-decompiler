@@ -10,12 +10,12 @@ sealed interface ConcreteValue {
 }
 
 sealed interface StackEntry {
-    val type: TvmStackEntryType
+    var type: TvmStackEntryType
     val name: StackEntryName
     val concreteValue: ConcreteValue?
 
     data class Simple(
-        override val type: TvmStackEntryType,
+        override var type: TvmStackEntryType,
         override val name: StackEntryName,
         override val concreteValue: ConcreteValue? = null
     ) : StackEntry

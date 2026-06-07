@@ -9,6 +9,8 @@ interface IRNodeTransformer {
             is IRNode.VariableDeclaration -> transformVariableDeclaration(node)
             is IRNode.FunctionCall -> transformFunctionCall(node)
             is IRNode.SliceLiteral -> transformSliceLiteral(node)
+            is IRNode.ConstSliceDecl -> transformConstSliceDecl(node)
+            is IRNode.SliceConstRef -> transformSliceConstRef(node)
             is IRNode.IfElse -> transformIfElse(node)
             is IRNode.WhileLoop -> transformWhileLoop(node)
             is IRNode.UntilLoop -> transformUntilLoop(node)
@@ -24,6 +26,8 @@ interface IRNodeTransformer {
     }
 
     fun transformSliceLiteral(node: IRNode.SliceLiteral): IRNode = node
+    fun transformConstSliceDecl(node: IRNode.ConstSliceDecl): IRNode = node
+    fun transformSliceConstRef(node: IRNode.SliceConstRef): IRNode = node
     fun transformAsmFunction(node: IRNode.AsmFunction): IRNode = node
     fun transformComment(node: IRNode.Comment): IRNode = node
     fun transformFunctionReturnStatement(node: IRNode.FunctionReturnStatement): IRNode = node
@@ -34,7 +38,8 @@ interface IRNodeTransformer {
     fun transformRoot(node: IRNode.Root): IRNode.Root {
         return IRNode.Root(
             node.asmFunctions,
-            node.functions.map { transform(it) as IRNode.Function }
+            node.functions.map { transform(it) as IRNode.Function },
+            node.constants
         )
     }
 
@@ -69,6 +74,7 @@ interface IRNodeTransformer {
             node.name,
             node.args.map { transform(it) },
             node.asmBody,
+            node.pure,
         )
     }
 

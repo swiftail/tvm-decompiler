@@ -14,7 +14,8 @@ object AsmFunctionFactory {
         fnName: String,
         reorg: Reorg?,
         constraints: List<FiftHelper.AsmConstraint>,
-        overrideOutputs: List<Cp0InstructionRegistry.TvmCp0InstValueFlowOutputsEntry>? = null
+        overrideOutputs: List<Cp0InstructionRegistry.TvmCp0InstValueFlowOutputsEntry>? = null,
+        pure: Boolean = false
     ): InstParser {
         return { ctx, instList ->
             val primaryInst = instList.first()
@@ -136,7 +137,8 @@ object AsmFunctionFactory {
             val callNode = IRNode.FunctionCall(
                 effectiveName,
                 finalArgs.map { IRNode.VariableUsage(it, true) },
-                asmBody
+                asmBody,
+                pure
             )
 
             val outputDescs = overrideOutputs ?: (instData.instDescriptionRaw.valueFlow.outputs.stack ?: emptyList())

@@ -44,15 +44,13 @@ object BocDecoder {
     private fun isInlineBase64(input: String): Boolean {
         val trimmed = input.trim()
         return trimmed.matches(Regex("^[a-zA-Z0-9+/=_]+$")) &&
-                trimmed.length > 10 &&
-                !trimmed.contains(File.separator)
+                trimmed.length > 10
     }
 
     private fun isInlineHex(input: String): Boolean {
         val trimmed = input.trim()
         return trimmed.matches(Regex("^[0-9a-fA-F]+$")) &&
-                trimmed.length % 2 == 0 &&
-                !trimmed.contains(File.separator)
+                trimmed.length % 2 == 0
     }
 
     private fun readBinaryFile(file: File): ByteArray {

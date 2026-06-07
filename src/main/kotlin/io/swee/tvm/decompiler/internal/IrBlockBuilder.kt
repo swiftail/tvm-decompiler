@@ -16,7 +16,12 @@ class IrBlockBuilder(
     val typeRefinements: MutableMap<StackEntry, TvmStackEntryType> = mutableMapOf()
     var isReturnContext: Boolean = true
     var hasAltReturn: Boolean = false
+    var hasDiverged: Boolean = false
     var remainingInstructions: MutableList<TvmInst>? = null
+    var options: DecompilerOptions = DecompilerOptions()
+    var registry: ParserRegistry? = null
+
+    var callArgObserver: ((BigInteger, Int, TvmStackEntryType) -> Unit)? = null
 
     fun appendNode(node: IRNode): IrBlockBuilder {
         buffer += node
@@ -113,6 +118,10 @@ class IrBlockBuilder(
         childBuilder.callRefMapping = this.callRefMapping
         childBuilder.isReturnContext = this.isReturnContext
         childBuilder.hasAltReturn = this.hasAltReturn
+        childBuilder.options = this.options
+        childBuilder.registry = this.registry
+        childBuilder.typeRefinements.putAll(this.typeRefinements)
+        childBuilder.callArgObserver = this.callArgObserver
         return childBuilder
     }
 
@@ -128,6 +137,10 @@ class IrBlockBuilder(
         }.distinct()
         for (item in parentMergeSources) {
             stack.addAll(upstream.merge(item.upstream))
+            for ((entry, type) in item.typeRefinements) {
+                val joined = TypeLattice.join(typeRefinements[entry], type)
+                if (joined != null) typeRefinements[entry] = joined
+            }
         }
     }
 }

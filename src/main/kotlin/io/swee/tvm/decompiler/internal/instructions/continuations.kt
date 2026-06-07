@@ -275,21 +275,71 @@ fun parseIfBlock(
     val elseContinuation = elseEntry?.continuationInstructions()
     val condNode = IRNode.CodeBlock(listOf(IRNode.VariableUsage(condEntry, tracked = true)), isExpression = true)
 
-    val (ifNode, ifCtx) = ifContinuation?.let {
-        parseContinuation(registry, ctx, it, isReturn = ifReturn)
-    } ?: (null to null)
-    val (elseNode, elseCtx) = elseContinuation?.let {
-        parseContinuation(registry, ctx, it, isReturn = elseReturn)
-    } ?: (null to null)
+    fun parseBranches(): Pair<Pair<IRNode.CodeBlock?, IrBlockBuilder?>, Pair<IRNode.CodeBlock?, IrBlockBuilder?>> {
+        val ifRes = ifContinuation?.let {
+            parseContinuation(registry, ctx, it, isReturn = ifReturn)
+        } ?: (null to null)
+        val elseRes = elseContinuation?.let {
+            parseContinuation(registry, ctx, it, isReturn = elseReturn)
+        } ?: (null to null)
+        return ifRes to elseRes
+    }
+
+    var (ifPair, elsePair) = parseBranches()
+    val baseUsed = ctx.upstream.getUsedEntries().size
+    val extraNeeded = listOfNotNull(ifPair.second, elsePair.second)
+        .maxOfOrNull { it.upstream.getUsedEntries().size - baseUsed } ?: 0
+    if (extraNeeded > 0) {
+        ctx.stackEnsureAtLeast(ctx.stackDepth() + extraNeeded)
+        val reparsed = parseBranches()
+        ifPair = reparsed.first
+        elsePair = reparsed.second
+    }
+
+    val (ifNode, ifCtx) = ifPair
+    val (elseNode, elseCtx) = elsePair
     val fallthroughCtx = ctx.fork()
 
+    val ifDiverged = ifCtx?.hasDiverged == true
+    val elseDiverged = elseCtx?.hasDiverged == true
+
     val finalized = buildList {
-        if (ifCtx != null && !ifReturn) {
+        if (ifCtx != null && !ifReturn && !ifDiverged) {
             add(ifCtx)
         }
-        if (elseCtx != null && !elseReturn) {
+        if (elseCtx != null && !elseReturn && !elseDiverged) {
             add(elseCtx)
         }
+    }
+
+    if (ifCtx != null && elseCtx != null && (ifDiverged || ifReturn) && (elseDiverged || elseReturn)) {
+        ctx.appendNode(IRNode.IfElse(condNode, ifNode, elseNode, ifnot))
+        ctx.hasDiverged = true
+        return
+    }
+
+    val ifSurvives = ifCtx != null && !ifReturn && !ifDiverged
+    val elseSurvives = elseCtx != null && !elseReturn && !elseDiverged
+    if (ifCtx != null && elseCtx != null && ((elseDiverged && ifSurvives) || (ifDiverged && elseSurvives))) {
+        val (survivor, splicedNodes) = if (elseDiverged) {
+            ifCtx to buildList {
+                add(IRNode.IfElse(condNode, elseNode, null, !ifnot))
+                ifNode?.entries?.let(::addAll)
+            }
+        } else {
+            elseCtx to buildList {
+                add(IRNode.IfElse(condNode, ifNode, null, ifnot))
+                elseNode?.entries?.let(::addAll)
+            }
+        }
+        ControlFlowResolver.resolveForward(
+            ctx,
+            splicedNodes,
+            listOf(survivor),
+            null,
+            listOfNotNull(ifCtx, elseCtx)
+        )
+        return
     }
 
     ControlFlowResolver.resolveForward(
@@ -303,7 +353,7 @@ fun parseIfBlock(
             ),
         ),
         finalized,
-        if (finalized.size < 2 && !(ifReturn && elseEntry != null)) {
+        if (finalized.size < 2 && !(ifReturn && elseEntry != null) && !(elseEntry != null && (ifDiverged || elseDiverged))) {
             fallthroughCtx
         } else {
             null
@@ -349,13 +399,13 @@ private fun containsAltReturn(instructions: List<TvmInst>): Boolean {
 fun registerContinuationParsers(registry: ParserRegistry) {
     with(registry) {
         register<TvmConstDataPushcontShortInst>(ParserLevel.MANUAL) { ctx, inst ->
-            ctx.stackPush(newContinuation(name("continuation"), inst.c))
+            ctx.stackPush(newContinuation(name("continuation"), inst.c.list))
         }
         register<TvmConstDataPushrefcontInst>(ParserLevel.MANUAL) { ctx, inst ->
-            ctx.stackPush(newContinuation(name("continuation"), inst.c))
+            ctx.stackPush(newContinuation(name("continuation"), inst.c.list))
         }
         register<TvmConstDataPushcontInst> (ParserLevel.MANUAL){ ctx, inst ->
-            ctx.stackPush(newContinuation(name("continuation"), inst.c))
+            ctx.stackPush(newContinuation(name("continuation"), inst.c.list))
         }
         register<TvmContLoopsWhileInst>(ParserLevel.MANUAL) { ctx, inst ->
             val bodyEntry = ctx.stackPop(TvmStackEntryType.CONTINUATION.typename)
@@ -381,14 +431,14 @@ fun registerContinuationParsers(registry: ParserRegistry) {
             parseIfjmpBlock(registry, ctx, ifEntry, condEntry, false)
         }
         register<TvmContConditionalIfjmprefInst>(ParserLevel.MANUAL) { ctx, inst ->
-            val ifEntry = newContinuation(name("continuation"), inst.c)
+            val ifEntry = newContinuation(name("continuation"), inst.c.list)
             val condEntry = ctx.stackPop(TvmStackEntryType.INT.typename)
 
             parseIfjmpBlock(registry, ctx, ifEntry, condEntry, false)
         }
         register<TvmContConditionalIfrefInst>(ParserLevel.MANUAL) { ctx, inst ->
             val condEntry = ctx.stackPop(TvmStackEntryType.INT.typename)
-            val ifEntry = newContinuation(name("continuation"), inst.c)
+            val ifEntry = newContinuation(name("continuation"), inst.c.list)
 
             parseIfBlock(
                 registry,
@@ -404,7 +454,7 @@ fun registerContinuationParsers(registry: ParserRegistry) {
         register<TvmContConditionalIfelserefInst>(ParserLevel.MANUAL) { ctx, inst ->
             val ifEntry = ctx.stackPop(TvmStackEntryType.CONTINUATION.typename)
             val condEntry = ctx.stackPop(TvmStackEntryType.INT.typename)
-            val elseEntry = newContinuation(name("continuation"), inst.c)
+            val elseEntry = newContinuation(name("continuation"), inst.c.list)
 
             parseIfBlock(
                 registry,
@@ -458,14 +508,14 @@ fun registerContinuationParsers(registry: ParserRegistry) {
         }
         register<TvmContConditionalIfnotrefInst>(ParserLevel.MANUAL) { ctx, inst ->
             val condEntry = ctx.stackPop(TvmStackEntryType.INT.typename)
-            val ifEntry = newContinuation(name("continuation"), inst.c)
+            val ifEntry = newContinuation(name("continuation"), inst.c.list)
 
             parseIfBlock(
                 registry, ctx, ifEntry, false, null, false, condEntry, true
             )
         }
         register<TvmContConditionalIfnotjmprefInst>(ParserLevel.MANUAL) { ctx, inst ->
-            val ifEntry = newContinuation(name("continuation"), inst.c)
+            val ifEntry = newContinuation(name("continuation"), inst.c.list)
             val condEntry = ctx.stackPop(TvmStackEntryType.INT.typename)
 
             parseIfjmpBlock(registry, ctx, ifEntry, condEntry, true)
@@ -478,9 +528,9 @@ fun registerContinuationParsers(registry: ParserRegistry) {
             parseIfjmpBlock(registry, ctx, retEntry, condEntry, true, forceReturn = true)
         }
         register<TvmContConditionalIfrefelserefInst>(ParserLevel.MANUAL) { ctx, inst ->
-            val elseEntry = newContinuation(name("continuation"), inst.c2)
+            val elseEntry = newContinuation(name("continuation"), inst.c2.list)
             val condEntry = ctx.stackPop(TvmStackEntryType.INT.typename)
-            val ifEntry = newContinuation(name("continuation"), inst.c1)
+            val ifEntry = newContinuation(name("continuation"), inst.c1.list)
 
             parseIfBlock(
                 registry,
@@ -496,7 +546,7 @@ fun registerContinuationParsers(registry: ParserRegistry) {
         register<TvmContConditionalIfrefelseInst>(ParserLevel.MANUAL) { ctx, inst ->
             val elseEntry = ctx.stackPop(TvmStackEntryType.CONTINUATION.typename)
             val condEntry = ctx.stackPop(TvmStackEntryType.INT.typename)
-            val ifEntry = newContinuation(name("continuation"), inst.c)
+            val ifEntry = newContinuation(name("continuation"), inst.c.list)
 
             parseIfBlock(
                 registry,
@@ -513,7 +563,7 @@ fun registerContinuationParsers(registry: ParserRegistry) {
             val condEntry = ctx.stackPop(TvmStackEntryType.INT.typename)
             val ifEntry = newContinuation(name("continuation"), listOf())
 
-            parseIfjmpBlock(registry, ctx, ifEntry, condEntry, false)
+            parseIfjmpBlock(registry, ctx, ifEntry, condEntry, false, forceReturn = true)
         }
         register<TvmContConditionalIfnotjmpInst>(ParserLevel.MANUAL) { ctx, inst ->
             val ifEntry = ctx.stackPop(TvmStackEntryType.CONTINUATION.typename)
@@ -522,12 +572,12 @@ fun registerContinuationParsers(registry: ParserRegistry) {
             parseIfjmpBlock(registry, ctx, ifEntry, condEntry, true)
         }
         register<TvmContBasicCallrefInst>(ParserLevel.MANUAL) { ctx, inst ->
-            val syntheticId = ctx.callRefMapping?.get(inst.c)
+            val syntheticId = ctx.callRefMapping?.get(inst.c.list)
             if (syntheticId != null) {
                 val idx = (-syntheticId.toLong() - 1000).toInt()
                 handleCallById(ctx, syntheticId, "callref_$idx")
             } else {
-                parseCallContinuation(registry, ctx, inst.c)
+                parseCallContinuation(registry, ctx, inst.c.list)
             }
         }
         register<TvmContBasicExecuteInst>(ParserLevel.MANUAL) { ctx, inst ->
@@ -566,6 +616,10 @@ fun registerContinuationParsers(registry: ParserRegistry) {
         register<TvmContRegistersSamealtsaveInst>(ParserLevel.MANUAL) { _, _ -> }
 
         register<TvmContBasicRetaltInst>(ParserLevel.MANUAL) { ctx, _ ->
+            ctx.appendNode(IRNode.FunctionReturnStatement(ctx.stackCopy().map {
+                IRNode.VariableUsage(it, tracked = true)
+            }))
+            ctx.hasDiverged = true
             ctx.remainingInstructions?.clear()
         }
 
@@ -579,6 +633,13 @@ fun registerContinuationParsers(registry: ParserRegistry) {
             val condEntry = ctx.stackPop(TvmStackEntryType.INT.typename)
             val ifEntry = newContinuation(name("continuation"), listOf())
             parseIfjmpBlock(registry, ctx, ifEntry, condEntry, true, forceReturn = true)
+        }
+
+        register<TvmExceptionsThrowanyInst>(ParserLevel.MANUAL) { ctx, _ ->
+            val excno = ctx.stackPop()
+            ctx.appendNode(IRNode.FunctionCall("throw", listOf(IRNode.VariableUsage(excno, tracked = true))))
+            ctx.hasDiverged = true
+            ctx.remainingInstructions?.clear()
         }
     }
 }
@@ -606,6 +667,9 @@ private fun handleCallById(ctx: IrBlockBuilder, methodId: java.math.BigInteger, 
         val argType = sig.argTypes.getOrNull(i)
         if (entry.type == TvmStackEntryType.UNKNOWN && argType != null && argType != TvmStackEntryType.UNKNOWN) {
             ctx.typeRefinements.putIfAbsent(entry, argType)
+        }
+        if (entry.type != TvmStackEntryType.UNKNOWN) {
+            ctx.callArgObserver?.invoke(methodId, i, entry.type)
         }
         IRNode.VariableUsage(entry, tracked = true)
     }.reversed()

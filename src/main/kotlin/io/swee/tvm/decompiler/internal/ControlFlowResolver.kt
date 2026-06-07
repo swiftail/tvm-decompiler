@@ -4,6 +4,27 @@ import io.swee.tvm.decompiler.internal.ir.IRNode
 import java.util.*
 
 object ControlFlowResolver {
+
+    private fun appendDefault(ctx: IrBlockBuilder, merged: StackEntry, type: TvmStackEntryType) {
+        val registry = ctx.registry
+        val insts = type.default()
+        if (registry == null || insts.isEmpty()) {
+            ctx.appendNode(IRNode.VariableDeclaration(listOf(merged), IRNode.IntLiteral("null()")))
+            return
+        }
+        val probe = IrBlockBuilder(FixedUpstreamStack(listOf()))
+        probe.registry = registry
+        for (inst in insts) registry.parse(probe, inst)
+        val nodes = probe.build().entries
+        nodes.forEachIndexed { i, node ->
+            if (i == nodes.lastIndex && node is IRNode.VariableDeclaration) {
+                ctx.appendNode(IRNode.VariableDeclaration(listOf(merged), node.value, node.untuple, node.reassignment))
+            } else {
+                ctx.appendNode(node)
+            }
+        }
+    }
+
     // if else
     fun resolveForward(
         ctx: IrBlockBuilder,
@@ -39,16 +60,16 @@ object ControlFlowResolver {
             } else {
                 mergedStack.add(merged)
 
-                val declaration = IRNode.VariableDeclaration(
-                    entries = listOf(merged),
-                    value = if (fallthrough == null) {
-                        IRNode.IntLiteral(sampleEntry.type.default()) // TODO
-                    } else {
-                        IRNode.VariableUsage(sampleEntry, tracked = true)
-                    }
-                )
-
-                ctx.appendNode(declaration)
+                if (fallthrough == null) {
+                    appendDefault(ctx, merged, sampleEntry.type)
+                } else {
+                    ctx.appendNode(
+                        IRNode.VariableDeclaration(
+                            entries = listOf(merged),
+                            value = IRNode.VariableUsage(sampleEntry, tracked = true)
+                        )
+                    )
+                }
 
                 allBranches.forEachIndexed { branchIndex, branchBuilder ->
                     val valueInBranch = entriesAtPosition[branchIndex]

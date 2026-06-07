@@ -2,7 +2,12 @@ package io.swee.tvm.decompiler.internal
 
 import io.swee.tvm.decompiler.api.TvmDecompiler
 import io.swee.tvm.decompiler.api.TvmDecompilerResult
+import io.swee.tvm.decompiler.internal.ir.BranchFoldingPass
+import io.swee.tvm.decompiler.internal.ir.CopyCoalescingPass
+import io.swee.tvm.decompiler.internal.ir.DeadPhiEliminationPass
 import io.swee.tvm.decompiler.internal.ir.IRNode
+import io.swee.tvm.decompiler.internal.ir.RedundantStoreEliminationPass
+import io.swee.tvm.decompiler.internal.ir.TypeResolutionPass
 import io.swee.tvm.decompiler.internal.instructions.*
 import io.swee.tvm.decompiler.internal.print.RootPrinter
 import org.ton.bytecode.*
@@ -31,6 +36,11 @@ object TvmDecompilerImpl : TvmDecompiler {
 
     data class Result(override val files: List<ResultFile>) : TvmDecompilerResult {
     }
+
+    data class ParsedFunction(
+        val function: IRNode.Function,
+        val seeds: Map<StackEntry, TvmStackEntryType>
+    )
 
     private fun parseHeader(
         iterator: Iterator<TvmInst>,
@@ -95,6 +105,7 @@ object TvmDecompilerImpl : TvmDecompiler {
         registerContinuationParsers(registry)
         registerGlobalsParsers(registry)
         registerCellParsers(registry)
+        registerConstSliceParsers(registry)
         registerEquivParsers(registry)
         registerTupleParsers(registry)
         registerVirtualInstructions(registry)
@@ -107,7 +118,7 @@ object TvmDecompilerImpl : TvmDecompiler {
         registry
     }
 
-    override fun decompile(boc: ByteArray): TvmDecompilerResult {
+    override fun decompile(boc: ByteArray, options: DecompilerOptions): TvmDecompilerResult {
         val registry = this.registry
 
         val disassembly = disassembleBoc(boc)
@@ -143,18 +154,48 @@ object TvmDecompilerImpl : TvmDecompiler {
             }
         val signatures = inferSignatures(augmentedMethods, registry, entryPointSignatures, callrefMapping)
 
-        val callrefFunctionNodes = callrefMapping.entries
+        val parsedCallrefs = callrefMapping.entries
             .distinctBy { it.value }
             .map { (instList, syntheticId) ->
-                parseCallrefFunction(registry, instList, syntheticId, signatures, callrefMapping)
+                parseCallrefFunction(registry, instList, syntheticId, signatures, callrefMapping, options)
             }
 
-        val functionNodes = header.functions.map {
-            parseFunction(registry, it.value, signatures, callrefMapping)
+        val parsedFunctions = header.functions.map {
+            parseFunction(registry, it.value, signatures, callrefMapping, options)
         }
 
-        val rootNode = IRNode.Root(listOf(), callrefFunctionNodes + functionNodes)
-        val rootPrinter = RootPrinter()
+        val allFunctions = (parsedCallrefs + parsedFunctions).map { parsed ->
+            val function = parsed.function
+            TypeResolutionPass.run(function, parsed.seeds)
+            signatures[function.methodId]?.let { sig ->
+                val returnStmt = function.codeBlock.entries.lastOrNull()
+                if (returnStmt is IRNode.FunctionReturnStatement) {
+                    returnStmt.variables.forEachIndexed { i, usage ->
+                        val t = sig.returnTypes.getOrNull(i)
+                        if (usage.entry.type == TvmStackEntryType.UNKNOWN && t != null && t != TvmStackEntryType.UNKNOWN) {
+                            usage.entry.type = t
+                        }
+                    }
+                }
+            }
+
+            val base = DeadPhiEliminationPass.run(
+                RedundantStoreEliminationPass.run(
+                    CopyCoalescingPass.run(DeadPhiEliminationPass.run(function.codeBlock))
+                )
+            )
+            val cleaned = if (options.exact) base else DeadPhiEliminationPass.run(BranchFoldingPass.run(base))
+            IRNode.Function(
+                function.name,
+                function.methodId,
+                function.upstreamStack,
+                cleaned,
+                function.isInlineRef
+            )
+        }
+
+        val rootNode = IRNode.Root(listOf(), allFunctions)
+        val rootPrinter = RootPrinter(options)
 
         return Result(
             listOf(
@@ -177,8 +218,9 @@ object TvmDecompilerImpl : TvmDecompiler {
         registry: ParserRegistry,
         data: FunctionData,
         signatures: Map<BigInteger, FunctionSignature>,
-        callrefMapping: Map<List<TvmInst>, BigInteger> = emptyMap()
-    ): IRNode.Function {
+        callrefMapping: Map<List<TvmInst>, BigInteger> = emptyMap(),
+        options: DecompilerOptions = DecompilerOptions()
+    ): ParsedFunction {
         val isEntryPoint = data.id in ENTRY_POINT_IDS
         val upstream: UpstreamStack = if (isEntryPoint) {
             DiscoveryUpstreamStack(ENTRY_POINT_ARGS)
@@ -196,6 +238,8 @@ object TvmDecompilerImpl : TvmDecompiler {
         val builder = IrBlockBuilder(upstream)
         builder.callSignatures = signatures
         builder.callRefMapping = callrefMapping
+        builder.options = options
+        builder.registry = registry
 
         val functionName = when (data.id) {
             BigInteger("-1") -> "recv_external"
@@ -212,11 +256,14 @@ object TvmDecompilerImpl : TvmDecompiler {
             IRNode.CodeBlock(listOf())
         }
 
-        return IRNode.Function(
-            functionName,
-            data.id,
-            upstream,
-            codeBlock
+        return ParsedFunction(
+            IRNode.Function(
+                functionName,
+                data.id,
+                upstream,
+                codeBlock
+            ),
+            builder.typeRefinements.toMap()
         )
     }
 
@@ -225,8 +272,9 @@ object TvmDecompilerImpl : TvmDecompiler {
         instList: List<TvmInst>,
         syntheticId: BigInteger,
         signatures: Map<BigInteger, FunctionSignature>,
-        callrefMapping: Map<List<TvmInst>, BigInteger>
-    ): IRNode.Function {
+        callrefMapping: Map<List<TvmInst>, BigInteger>,
+        options: DecompilerOptions = DecompilerOptions()
+    ): ParsedFunction {
         val idx = (-syntheticId.toLong() - 1000).toInt()
         val functionName = "callref_$idx"
 
@@ -241,6 +289,8 @@ object TvmDecompilerImpl : TvmDecompiler {
         val builder = IrBlockBuilder(upstream)
         builder.callSignatures = signatures
         builder.callRefMapping = callrefMapping
+        builder.options = options
+        builder.registry = registry
 
         logger.fine("Parsing callref function $functionName")
 
@@ -251,12 +301,15 @@ object TvmDecompilerImpl : TvmDecompiler {
             IRNode.CodeBlock(listOf())
         }
 
-        return IRNode.Function(
-            functionName,
-            syntheticId,
-            upstream,
-            codeBlock,
-            isInlineRef = true
+        return ParsedFunction(
+            IRNode.Function(
+                functionName,
+                syntheticId,
+                upstream,
+                codeBlock,
+                isInlineRef = true
+            ),
+            builder.typeRefinements.toMap()
         )
     }
 
@@ -275,9 +328,11 @@ object TvmDecompilerImpl : TvmDecompiler {
         registry: ParserRegistry,
         instList2: List<TvmInst>
     ): IRNode.CodeBlock {
+        val builder = IrBlockBuilder(FixedUpstreamStack(listOf()))
+        builder.registry = registry
         return parseCodeBlock(
             registry,
-            IrBlockBuilder(FixedUpstreamStack(listOf())),
+            builder,
             instList2,
             false
         )
@@ -305,16 +360,17 @@ object TvmDecompilerImpl : TvmDecompiler {
                 if (nextElements.size != nextElementsSizePrev) {
                     i += (nextElementsSizePrev - nextElements.size)
                 }
+                if (ctx.hasDiverged) break
             } catch (ex: Throwable) {
                 logger.warning("Exception during instruction parsing: ${inst.mnemonic} $inst — ${ex.message}")
                 ctx.appendNode(IRNode.Comment("exception: ${inst.mnemonic}\n${ex.message}"))
                 break
             }
         }
-        if (ctx.isExpression) {
+        if (ctx.isExpression && !ctx.hasDiverged) {
             ctx.appendNode(IRNode.VariableUsage(ctx.stackFetch(0), true))
         }
-        if (ret) {
+        if (ret && !ctx.hasDiverged) {
             ctx.appendNode(IRNode.FunctionReturnStatement(ctx.stackCopy().map {
                 IRNode.VariableUsage(it, tracked = true)
             }.toList()))

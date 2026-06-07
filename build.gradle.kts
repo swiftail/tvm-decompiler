@@ -37,18 +37,19 @@ dependencies {
     implementation(
         group = "com.github.espritoxyz.ton-disassembler",
         name = "tvm-disasm",
-        version = "64366dba2b9ea0a8994248ca6249545d075552e7"
+        version = "ac4baedf7cb7bc04ca9ba3d5cf9f4e294f00b10f"
     )
     implementation(
         group = "com.github.espritoxyz.ton-disassembler",
         name = "tvm-opcodes",
-        version = "64366dba2b9ea0a8994248ca6249545d075552e7"
+        version = "ac4baedf7cb7bc04ca9ba3d5cf9f4e294f00b10f"
     )
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.4.1")
     implementation("org.reflections:reflections:0.10.2")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.20.1")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.20.1")
     implementation("org.ton.ton4j:cell:1.3.4")
+    implementation("org.ton.ton4j:address:1.3.4")
     implementation("org.jetbrains.kotlinx:kotlinx-cli:0.3.6")
 
     testImplementation(platform("org.junit:junit-bom:6.0.1"))
@@ -164,6 +165,7 @@ tasks.register("roundTripTest") {
                 commandLine(
                     "java", "-jar", shadowJar.absolutePath,
                     "boc", step1Boc.absolutePath,
+                    "-e",
                     "-o", decompiledDir.absolutePath
                 )
             }

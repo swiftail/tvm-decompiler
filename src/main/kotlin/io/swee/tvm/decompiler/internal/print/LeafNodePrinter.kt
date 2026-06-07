@@ -1,5 +1,6 @@
 package io.swee.tvm.decompiler.internal.print
 
+import io.swee.tvm.decompiler.internal.DecompilerOptions
 import io.swee.tvm.decompiler.internal.FunctionGenerationContext
 import io.swee.tvm.decompiler.internal.Literals
 import io.swee.tvm.decompiler.internal.StackEntryName
@@ -57,7 +58,7 @@ abstract class LeafNodePrinter<T : IRNode>(val clazz: Class<T>) {
     open fun skip(ctx: LeafPrinterContext, node: T): Boolean = false
 }
 
-class RootPrinter {
+class RootPrinter(private val options: DecompilerOptions = DecompilerOptions()) {
     fun print(root: Root): String {
         val sb = StringBuilder()
         val registry = LeafPrinterRegistry(listOf(
@@ -66,6 +67,7 @@ class RootPrinter {
             VariableDeclarationPrinter(),
             IntLiteralPrinter(),
             SliceLiteralPrinter(),
+            SliceConstRefPrinter(),
             CommentPrinter(),
             FunctionReturnStatementPrinter(),
             FunctionCallPrinter(),
@@ -77,7 +79,7 @@ class RootPrinter {
             GlobalReadPrinter()
         ).associateBy { it.clazz } as Map<Class<out IRNode>, LeafNodePrinter<IRNode>>)
 
-        val genCtx = analyze(root)
+        val genCtx = analyze(root, options)
 
         sb.append("#include \"stdlib.fc\";\n")
 
@@ -86,6 +88,11 @@ class RootPrinter {
             sb.append("global $typeName __global_$num;\n")
         }
         if (genCtx.globalVariableTypes.isNotEmpty()) sb.append("\n")
+
+        for (c in genCtx.node.constants) {
+            sb.append("const slice ${c.name} = ${c.literal};\n")
+        }
+        if (genCtx.node.constants.isNotEmpty()) sb.append("\n")
 
         for (asmFunction in genCtx.node.asmFunctions) {
             sb.append(asmFunction.returnType.joinToString(separator = ", ", prefix = "(", postfix = ")") { it.type.funcTypename })
@@ -282,6 +289,10 @@ private fun isInlined(node: VariableDeclaration, ctx: LeafPrinterContext): Boole
             return@all true
         }
 
+        if (!ctx.sar.loopScopes.declaredAndUsedInSameScope(it)) {
+            return@all false
+        }
+
         ctx.sar.stackEntryUsage.getOrDefault(
             it,
             0
@@ -300,6 +311,12 @@ class IntLiteralPrinter : LeafNodePrinter<IntLiteral>(IntLiteral::class.java) {
 class SliceLiteralPrinter : LeafNodePrinter<SliceLiteral>(SliceLiteral::class.java) {
     override fun print(ctx: LeafPrinterContext, node: SliceLiteral) {
         ctx.append("/* slice literal: ${Literals.cellLiteral(node.slice)} */")
+    }
+}
+
+class SliceConstRefPrinter : LeafNodePrinter<SliceConstRef>(SliceConstRef::class.java) {
+    override fun print(ctx: LeafPrinterContext, node: SliceConstRef) {
+        ctx.append(node.name)
     }
 }
 
@@ -365,7 +382,7 @@ class FunctionCallPrinter : LeafNodePrinter<FunctionCall>(FunctionCall::class.ja
             // TODO
             (node.name.startsWith("store_") || node.name.startsWith("load_") || node.name.startsWith("end_") ||
                     node.name.startsWith("slice_") || node.name.startsWith("begin_") || node.name.startsWith("parse_")
-                    || node.name.startsWith("skip_") || node.name.startsWith("preload_")) -> {
+                    || node.name.startsWith("skip_") || node.name.startsWith("preload_") || node.name.startsWith("hash_")) -> {
 
                 val src = node.args[0]
                 var multiline = false
@@ -465,7 +482,15 @@ class UntilLoopPrinter : LeafNodePrinter<UntilLoop>(UntilLoop::class.java) {
 
 class IfElsePrinter : LeafNodePrinter<IfElse>(IfElse::class.java) {
     override fun print(ctx: LeafPrinterContext, node: IfElse) {
-        ctx.append("${if (node.ifnot) "ifnot" else "if"} ")
+        val ifHasContent = hasPrintableContent(ctx, node.ifCodeBlock)
+        val elseHasContent = hasPrintableContent(ctx, node.elseCodeBlock)
+
+        val flip = !ifHasContent && elseHasContent
+        val ifnot = node.ifnot != flip
+        val body = if (flip) node.elseCodeBlock else node.ifCodeBlock
+        val trailingElse = if (flip) null else node.elseCodeBlock?.takeIf { elseHasContent }
+
+        ctx.append("${if (ifnot) "ifnot" else "if"} ")
         if (!isSingleLine(ctx, node.condCodeBlock)) {
             ctx.append("\n")
         }
@@ -474,9 +499,9 @@ class IfElsePrinter : LeafNodePrinter<IfElse>(IfElse::class.java) {
             ctx.append(ctx.indent())
         }
         ctx.append(" {\n")
-        node.ifCodeBlock?.let { ctx.print(it) }
+        body?.let { ctx.print(it) }
         ctx.append(ctx.indent())
-        node.elseCodeBlock?.let {
+        trailingElse?.let {
             ctx.append("} else {\n")
             ctx.print(it)
             ctx.append(ctx.indent())
@@ -485,6 +510,9 @@ class IfElsePrinter : LeafNodePrinter<IfElse>(IfElse::class.java) {
     }
 
 }
+
+private fun hasPrintableContent(ctx: LeafPrinterContext, block: CodeBlock?): Boolean =
+    block != null && block.entries.any { !ctx.skip(it) }
 
 class GlobalWritePrinter : LeafNodePrinter<GlobalWrite>(GlobalWrite::class.java) {
     override fun print(ctx: LeafPrinterContext, node: GlobalWrite) {

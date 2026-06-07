@@ -22,6 +22,9 @@ fun main(args: Array<String>) {
         val noStdlib by option(ArgType.Boolean, shortName = "n", description = "Exclude stdlib.fc from output")
             .default(false)
 
+        val exact by option(ArgType.Boolean, shortName = "e", fullName = "exact", description = "Byte-exact mode: keep asm_* wrappers for constant-slice opcodes")
+            .default(false)
+
         override fun execute() {
             val bocFormat = when (format) {
                 "auto" -> BocFormat.AUTO
@@ -34,7 +37,7 @@ fun main(args: Array<String>) {
             try {
                 val boc = BocDecoder.decode(input, bocFormat)
                 val facade = TvmDecompilerLib.facade()
-                val result: TvmDecompilerResult = facade.decompileBoc(boc)
+                val result: TvmDecompilerResult = facade.decompileBoc(boc, exact)
 
                 val outputDir = output?.let { File(it) }
                 OutputWriter.write(result, outputDir, includeStdlib = !noStdlib)
