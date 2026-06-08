@@ -155,8 +155,8 @@ fun registerStackParsers(registry: ParserRegistry) {
             ctx.stackPush(ctx.stackFetch(inst.k + 2))
         }
         register<TvmStackComplexBlkswapInst>(ParserLevel.MANUAL) { ctx, inst ->
-            val n = inst.i
-            val k = inst.j
+            val n = inst.i + 1
+            val k = inst.j + 1
             ctx.stackEnsureAtLeast(n + k)
 
             val topBlock = (0 until k).map { ctx.stackPop() }
@@ -196,8 +196,8 @@ fun registerStackParsers(registry: ParserRegistry) {
             ctx.stackPush(ctx.stackFetch(3))
         }
         register<TvmStackComplexReverseInst>(ParserLevel.MANUAL) { ctx, inst ->
-            ctx.stackEnsureAtLeast(inst.i + inst.j)
-            ctx.stackReverse(inst.j, inst.i + inst.j)
+            ctx.stackEnsureAtLeast(inst.i + inst.j + 2)
+            ctx.stackReverse(inst.j, inst.i + inst.j + 2)
         }
         register<TvmStackComplexBlkdropInst>(ParserLevel.MANUAL) { ctx, inst ->
             ctx.stackEnsureAtLeast(inst.i)
