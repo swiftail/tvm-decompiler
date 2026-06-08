@@ -1,11 +1,13 @@
 package io.swee.tvm.decompiler.internal.ir
 
 import io.swee.tvm.decompiler.internal.StackEntry
+import io.swee.tvm.decompiler.internal.analyzeLoopScopes
 import java.util.IdentityHashMap
 
 object CopyCoalescingPass {
 
     fun run(block: IRNode.CodeBlock): IRNode.CodeBlock {
+        val loopScopes = analyzeLoopScopes(block)
         val readCounts = mutableMapOf<StackEntry, Int>()
         block.accept(object : IRNodeVisitor {
             override fun visitAny(node: IRNode) {
@@ -51,6 +53,7 @@ object CopyCoalescingPass {
                 val ao = declOrder[a] ?: return
                 val bo = declOrder[b] ?: return
                 if (ao >= bo) return
+                if (loopScopes.declScope[a] != loopScopes.declScope[b]) return
                 parent[b] = a
                 copyNodes.add(node)
             }
